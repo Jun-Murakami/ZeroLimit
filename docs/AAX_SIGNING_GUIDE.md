@@ -64,16 +64,69 @@ echo 'export PATH="$PATH:$PACE_EDEN_TOOLS/bin"' >> ~/.zshrc
 
 ### 5. 署名用証明書の作成
 
-```bash
-# iLok USBが接続されていることを確認
-# PACE Central Web（https://pc2.paceap.com/ ・iLok License Manager 経由でログイン）で証明書を生成
+wraptool には **コードサイニング用の PFX** を `--keyfile` / `--keypassword` で渡します。社内配布・ベータ用途なら自己署名 PFX で十分動作します。マーケット流通用は商用 CA（DigiCert / SSL.com / Sectigo 等）発行のコードサイニング証明書を推奨。
 
-# 1. ログイン
-pace_eden login --account YOUR_ILOK_ACCOUNT
+#### Windows: PowerShell で自己署名 PFX を作成
 
-# 2. 証明書の生成（初回のみ）
-pace_eden certificate create --type developer
+```powershell
+# 自己署名のコードサイニング証明書を CurrentUser ストアへ作成
+$cert = New-SelfSignedCertificate `
+    -Subject "CN=ZeroLimit Dev" `
+    -Type CodeSigningCert `
+    -CertStoreLocation "Cert:\CurrentUser\My" `
+    -KeyExportPolicy Exportable `
+    -KeyAlgorithm RSA `
+    -KeyLength 2048 `
+    -NotAfter (Get-Date).AddYears(3)
+
+# wraptool の --keypassword に渡すパスワード（.env の PACE_KEYPASSWORD と一致させる）
+$pwd = ConvertTo-SecureString -String "ChangeThisPassword" -Force -AsPlainText
+
+# リポジトリルートに書き出し（.gitignore で除外済み）
+Export-PfxCertificate `
+    -Cert $cert `
+    -FilePath "$PSScriptRoot\..\zerolimit-dev.pfx" `
+    -Password $pwd
 ```
+
+確認：
+```powershell
+certutil -dump .\zerolimit-dev.pfx
+```
+
+PFX パスワードを平文でスクリプトに書きたくない場合は、`.env` の `PACE_KEYPASSWORD` を読み込んで SecureString 化するバリエーションが有効：
+
+```powershell
+$envPath = "$PSScriptRoot\..\.env"
+$kv = @{}
+foreach ($line in Get-Content $envPath) {
+    if ($line -match '^\s*([^#=][^=]*)=(.*)$') { $kv[$matches[1].Trim()] = $matches[2].Trim() }
+}
+$pwd = ConvertTo-SecureString -String $kv['PACE_KEYPASSWORD'] -Force -AsPlainText
+# （以降は上記と同じ）
+```
+
+#### 保存先（build_windows.ps1 が参照する順）
+
+1. `$env:PACE_PFX_PATH`（明示指定）
+2. プロジェクトルートの `zerolimit-dev.pfx` ← 標準
+3. `%USERPROFILE%\.zerolimit\dev.pfx`
+4. `.\certificates\zerolimit-dev.pfx`
+
+#### .env に揃えておく値
+
+```env
+PACE_USERNAME=<iLok アカウント名>
+PACE_PASSWORD=<iLok パスワード>
+PACE_ORGANIZATION=<PACE Central Web で取得した WCGUID (プラグインごとに固有)>
+PACE_KEYPASSWORD=<PFX のエクスポートパスワードと同じ値>
+```
+
+`.env` は `.gitignore` で除外済み。
+
+#### 商用 CA の PFX を使う場合
+
+発行された証明書を PFX 形式（秘密鍵付き）でエクスポートし、上記の保存先に置けば同じフローで動作します。商用 CA の多くは YubiKey / HSM ベースの保管を要求するため、HSM 経由署名に切り替えるケースは別途 wraptool のキー指定を調整してください。
 
 ## 署名プロセス
 
