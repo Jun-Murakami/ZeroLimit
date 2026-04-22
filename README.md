@@ -16,6 +16,7 @@ A **zero-latency** brickwall limiter for broadcast, streaming, and music masteri
 
 ## Screenshot
 
+<img width="747" height="819" alt="image" src="https://github.com/user-attachments/assets/e28971f9-7c49-4d21-bf13-31abb0751554" />
 The plugin window is resizable (minimum 410 × 390, default 470 × 470). Faders, meters, and the multiband band selector stretch fluidly.
 
 ## Requirements
