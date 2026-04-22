@@ -257,6 +257,7 @@ function App() {
             <ParameterFader
               parameterId='THRESHOLD'
               label='THRESHOLD'
+              sliderHeight={meterAndFaderHeight}
               min={-30}
               max={0}
               defaultValue={0}
@@ -481,6 +482,7 @@ function App() {
             <ParameterFader
               parameterId='OUTPUT_GAIN'
               label='OUTPUT'
+              sliderHeight={meterAndFaderHeight}
               min={-30}
               max={0}
               defaultValue={0}
