@@ -22,7 +22,7 @@ std::vector<std::byte> streamToVector(juce::InputStream& stream)
     std::vector<std::byte> result(sizeInBytes);
     stream.setPosition(0);
     [[maybe_unused]] const auto bytesRead = stream.read(result.data(), result.size());
-    jassert(bytesRead == static_cast<ssize_t>(sizeInBytes));
+    jassert(static_cast<size_t>(bytesRead) == sizeInBytes);
     return result;
 }
 
