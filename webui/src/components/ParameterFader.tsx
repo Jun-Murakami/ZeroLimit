@@ -175,10 +175,18 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
     if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
   };
 
-  const handleClickReset = (e: React.MouseEvent) => {
-    if ((e.ctrlKey || e.metaKey) && defaultValue !== undefined) {
+  // Ctrl/Cmd + クリックで defaultValue へリセット。
+  //  MUI Slider の内部 pointerdown ハンドラは同じ要素に直接登録されているので、
+  //  onMouseDown/onPointerDown（バブル相）で stopPropagation しても止まらない。
+  //  キャプチャ相（親要素で祖先→子孫の順に発火）で先取りし、
+  //  React 合成イベントとネイティブイベントの両方の伝播を止めることで
+  //  MUI が pointerdown を受け取る前に処理を完結させる。
+  const handlePointerDownCapture = (e: React.PointerEvent): void => {
+    if ((e.ctrlKey || e.metaKey) && defaultValue !== undefined)
+    {
       e.preventDefault();
       e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation();
       applyValue(defaultValue);
     }
   };
@@ -224,16 +232,17 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
       </Box>
 
       <Box sx={{ display: 'flex', height: SLIDER_HEIGHT, width: '100%', justifyContent: 'center', mb: '14px' }}>
-        <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center' }} ref={wheelRef}>
+        <Box
+          sx={{ position: 'relative', display: 'flex', alignItems: 'center' }}
+          ref={wheelRef}
+          onPointerDownCapture={handlePointerDownCapture}
+        >
           <StyledSlider
             value={toNorm(value, min, max) * 100}
             onChange={handleChange}
-            onMouseDown={(e) => {
-              handleClickReset(e);
-              if (!e.defaultPrevented) {
-                setIsDragging(true);
-                sliderState?.sliderDragStarted();
-              }
+            onMouseDown={() => {
+              setIsDragging(true);
+              sliderState?.sliderDragStarted();
             }}
             onMouseUp={() => {
               if (isDragging) {
