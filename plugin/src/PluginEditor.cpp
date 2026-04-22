@@ -132,6 +132,44 @@ static void queryWindowDpi(HWND hwnd, int& outDpi, double& outScale)
 
 } // namespace
 
+// WebView2/Chromium の起動前に追加のコマンドライン引数を渡すためのヘルパー。
+//  環境変数 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS に `--force-device-scale-factor=1`
+//  を注入し、WebView2 が独自に DPI スケーリングを適用するのを抑止する。
+//  ProTools Windows は（AAX ラッパー時）DPI 非対応モードで動作することが多く、
+//  スケーリングがかかると UI が本来の意図より大きく表示される問題を回避する。
+//  注意: WebView2 のブラウザプロセス生成前（= WebBrowserComponent の構築前）に呼ぶ必要がある。
+static juce::WebBrowserComponent::Options makeWebViewOptionsWithPreLaunchArgs(const juce::AudioProcessor& /*processor*/)
+{
+   #if defined(JUCE_WINDOWS)
+    if (juce::PluginHostType().isProTools()
+        && juce::PluginHostType::getPluginLoadedAs() == juce::AudioProcessor::WrapperType::wrapperType_AAX)
+    {
+        const char* kEnvName = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
+        const char* kArg     = "--force-device-scale-factor=1";
+
+        char*  existing = nullptr;
+        size_t len = 0;
+        if (_dupenv_s(&existing, &len, kEnvName) == 0 && existing != nullptr)
+        {
+            std::string combined(existing);
+            free(existing);
+            // 既に同じ指定があれば尊重、無ければ追記
+            if (combined.find("--force-device-scale-factor") == std::string::npos)
+            {
+                if (! combined.empty()) combined += ' ';
+                combined += kArg;
+                _putenv_s(kEnvName, combined.c_str());
+            }
+        }
+        else
+        {
+            _putenv_s(kEnvName, kArg);
+        }
+    }
+   #endif
+    return juce::WebBrowserComponent::Options{};
+}
+
 //==============================================================================
 
 ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProcessor& p)
@@ -141,14 +179,17 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
       webOutputGainRelay   { zl::id::OUTPUT_GAIN.getParamID() },
       webReleaseMsRelay    { zl::id::RELEASE_MS.getParamID() },
       webAutoReleaseRelay  { zl::id::AUTO_RELEASE.getParamID() },
+      webLinkRelay         { zl::id::LINK.getParamID() },
       webMeteringModeRelay { zl::id::METERING_MODE.getParamID() },
       thresholdAttachment    { *p.getState().getParameter(zl::id::THRESHOLD.getParamID()),     webThresholdRelay,    nullptr },
       outputGainAttachment   { *p.getState().getParameter(zl::id::OUTPUT_GAIN.getParamID()),   webOutputGainRelay,   nullptr },
       releaseMsAttachment    { *p.getState().getParameter(zl::id::RELEASE_MS.getParamID()),    webReleaseMsRelay,    nullptr },
       autoReleaseAttachment  { *p.getState().getParameter(zl::id::AUTO_RELEASE.getParamID()),  webAutoReleaseRelay,  nullptr },
+      linkAttachment         { *p.getState().getParameter(zl::id::LINK.getParamID()),          webLinkRelay,         nullptr },
       meteringModeAttachment { *p.getState().getParameter(zl::id::METERING_MODE.getParamID()), webMeteringModeRelay, nullptr },
       webView{
-          juce::WebBrowserComponent::Options{}
+          // ProTools Windows 等、DPI 非対応ホストで WebView2 の自動スケーリングを抑止する
+          makeWebViewOptionsWithPreLaunchArgs(p)
               .withBackend(juce::WebBrowserComponent::Options::Backend::webview2)
               .withWinWebView2Options(
                   juce::WebBrowserComponent::Options::WinWebView2{}
@@ -165,6 +206,7 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
               .withOptionsFrom(webOutputGainRelay)
               .withOptionsFrom(webReleaseMsRelay)
               .withOptionsFrom(webAutoReleaseRelay)
+              .withOptionsFrom(webLinkRelay)
               .withOptionsFrom(webMeteringModeRelay)
               .withNativeFunction(
                   juce::Identifier{"system_action"},
@@ -176,13 +218,17 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
                   [this](const juce::Array<juce::var>& args,
                          juce::WebBrowserComponent::NativeFunctionCompletion completion)
                   {
+                      // setSize は constrainer を経由しないため、ここで自前クランプする
+                      auto clampW = [](int w) { return juce::jlimit(kMinWidth,  kMaxWidth,  w); };
+                      auto clampH = [](int h) { return juce::jlimit(kMinHeight, kMaxHeight, h); };
+
                       if (args.size() > 0)
                       {
                           const auto action = args[0].toString();
                           if (action == "resizeTo" && args.size() >= 3)
                           {
-                              const int w = juce::roundToInt((double) args[1]);
-                              const int h = juce::roundToInt((double) args[2]);
+                              const int w = clampW(juce::roundToInt((double) args[1]));
+                              const int h = clampH(juce::roundToInt((double) args[2]));
                               setSize(w, h);
                               completion(juce::var{ true });
                               return;
@@ -191,7 +237,7 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
                           {
                               const int dw = juce::roundToInt((double) args[1]);
                               const int dh = juce::roundToInt((double) args[2]);
-                              setSize(getWidth() + dw, getHeight() + dh);
+                              setSize(clampW(getWidth() + dw), clampH(getHeight() + dh));
                               completion(juce::var{ true });
                               return;
                           }
@@ -222,12 +268,14 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
     addAndMakeVisible(webView);
 
     // 初期サイズ
-    setSize(500, 420);
+    setSize(470, 470);
 
     // リサイズ可能に（プラグイン/スタンドアロン共通）
+    //  - OS ウィンドウ四辺 / ResizableCornerComponent / WebUI オーバーレイ
+    //    すべて同じ最小・最大サイズを適用（window_action 側のクランプもこの定数を参照）
     setResizable(true, true);
-    setResizeLimits(420, 500, 2560, 1440);
-    resizerConstraints.setSizeLimits(420, 500, 2560, 1440);
+    setResizeLimits(kMinWidth, kMinHeight, kMaxWidth, kMaxHeight);
+    resizerConstraints.setSizeLimits(kMinWidth, kMinHeight, kMaxWidth, kMaxHeight);
 
     // リサイズグリッパー。WebView よりも前面に置き、WebUI 側の overlay から
     //   window_action.resizeTo を受けた時にも本体を正しく追従させる。

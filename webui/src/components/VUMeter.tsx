@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useLayoutEffect, useRef } from 'react';
 import { Box, Typography } from '@mui/material';
 
 // メーター描画定数
@@ -46,7 +46,7 @@ export const LevelMeterBar: React.FC<{ level: number; label: string; width?: num
   const cssW = width ?? DEFAULT_BAR_WIDTH;
   const cssH = height ?? METER_HEIGHT;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = setupHiDPICanvas(canvas, cssW, cssH);
@@ -115,7 +115,7 @@ export const GainReductionMeterBar: React.FC<{ grDb: number; width?: number; hei
   const cssW = width ?? DEFAULT_BAR_WIDTH * 2;
   const cssH = height ?? METER_HEIGHT;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = setupHiDPICanvas(canvas, cssW, cssH);
@@ -209,7 +209,7 @@ export const LoudnessMeterBar: React.FC<{ lkfs: number; width?: number; height?:
   const cssW = width ?? DEFAULT_BAR_WIDTH * 2 + 4;
   const cssH = height ?? METER_HEIGHT;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = setupHiDPICanvas(canvas, cssW, cssH);

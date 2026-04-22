@@ -9,9 +9,11 @@ namespace zl::id {
     // - METERING_MODE: メーター表示モード（0=Peak / 1=RMS / 2=Momentary）
     // - RELEASE_MS: 手動リリース時定数（0.01..1000 ms、log skew、既定 1.0）
     // - AUTO_RELEASE: プログラム依存リリース（既定 ON）
+    // - LINK: Threshold と Output Gain を相対オフセット固定で連動させる（既定 OFF）
     const juce::ParameterID THRESHOLD{"THRESHOLD", 1};
     const juce::ParameterID OUTPUT_GAIN{"OUTPUT_GAIN", 1};
     const juce::ParameterID METERING_MODE{"METERING_MODE", 1};
     const juce::ParameterID RELEASE_MS{"RELEASE_MS", 1};
     const juce::ParameterID AUTO_RELEASE{"AUTO_RELEASE", 1};
+    const juce::ParameterID LINK{"LINK", 1};
 }  // namespace zl::id

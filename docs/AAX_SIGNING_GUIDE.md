@@ -66,45 +66,96 @@ echo 'export PATH="$PATH:$PACE_EDEN_TOOLS/bin"' >> ~/.zshrc
 
 wraptool には **コードサイニング用の PFX** を `--keyfile` / `--keypassword` で渡します。社内配布・ベータ用途なら自己署名 PFX で十分動作します。マーケット流通用は商用 CA（DigiCert / SSL.com / Sectigo 等）発行のコードサイニング証明書を推奨。
 
-#### Windows: PowerShell で自己署名 PFX を作成
+#### ⚠️ 重大な落とし穴: PFX は **Legacy CSP** で作らないと動かない
 
-```powershell
-# 自己署名のコードサイニング証明書を CurrentUser ストアへ作成
-$cert = New-SelfSignedCertificate `
-    -Subject "CN=ZeroLimit Dev" `
-    -Type CodeSigningCert `
-    -CertStoreLocation "Cert:\CurrentUser\My" `
-    -KeyExportPolicy Exportable `
-    -KeyAlgorithm RSA `
-    -KeyLength 2048 `
-    -NotAfter (Get-Date).AddYears(3)
+`New-SelfSignedCertificate` は Windows 10 以降 **CNG (Cryptography Next Generation)** をデフォルトで使うが、**PACE wraptool 内部の signtool 系 API は Legacy CSP の秘密鍵しか扱えない**。`New-SelfSignedCertificate` で作った CNG 秘密鍵付き PFX を渡すと、wraptool 側は認証・WCGUID 確認を通過した上で、以下のエラーで落ちる:
 
-# wraptool の --keypassword に渡すパスワード（.env の PACE_KEYPASSWORD と一致させる）
-$pwd = ConvertTo-SecureString -String "ChangeThisPassword" -Force -AsPlainText
-
-# リポジトリルートに書き出し（.gitignore で除外済み）
-Export-PfxCertificate `
-    -Cert $cert `
-    -FilePath "$PSScriptRoot\..\zerolimit-dev.pfx" `
-    -Password $pwd
+```
+BinaryDsigException::CodesignToolError, 14, Error signing the specified binary.
+Key file ...\xxxxx.pfx doesn't contain a valid signing certificate.
 ```
 
-確認：
+一方 `Set-AuthenticodeSignature` 等は CNG でも通るため、「PFX 単体は健全に見えるのに wraptool だけ失敗」という紛らわしい状況になる。見分け方:
+
 ```powershell
-certutil -dump .\zerolimit-dev.pfx
+$cert = Get-PfxCertificate -FilePath $pfxPath -Password $pwd
+$rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+$rsa.Key.Provider.Provider   # → "Microsoft Software Key Storage Provider" なら CNG。NG。
+                             #   "Microsoft Enhanced RSA and AES Cryptographic Provider" なら Legacy CSP。OK。
 ```
 
-PFX パスワードを平文でスクリプトに書きたくない場合は、`.env` の `PACE_KEYPASSWORD` を読み込んで SecureString 化するバリエーションが有効：
+#### Windows: `certreq.exe` + INF で Legacy CSP PFX を作成（推奨）
+
+`New-SelfSignedCertificate` には Provider を強制するオプションがないので、INF ファイル経由で `certreq.exe` を使う:
 
 ```powershell
-$envPath = "$PSScriptRoot\..\.env"
+$pfxPath = "D:\Synching\code\JUCE\ZeroLimit\zerolimit-dev.pfx"
+$envPath = "D:\Synching\code\JUCE\ZeroLimit\.env"
+
 $kv = @{}
 foreach ($line in Get-Content $envPath) {
     if ($line -match '^\s*([^#=][^=]*)=(.*)$') { $kv[$matches[1].Trim()] = $matches[2].Trim() }
 }
-$pwd = ConvertTo-SecureString -String $kv['PACE_KEYPASSWORD'] -Force -AsPlainText
-# （以降は上記と同じ）
+$pfxPwdPlain = $kv['PACE_KEYPASSWORD']
+
+# 既存の ZeroLimit Dev 証明書があれば一度クリーンアップ
+foreach ($storeName in @('My','Root')) {
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store($storeName,'CurrentUser')
+    $store.Open('ReadWrite')
+    $old = @($store.Certificates | Where-Object { $_.Subject -eq 'CN=ZeroLimit Dev' })
+    foreach ($c in $old) { $store.Remove($c) | Out-Null }
+    $store.Close()
+}
+
+# Legacy CSP を明示して作成
+$inf = @"
+[Version]
+Signature="`$Windows NT`$"
+
+[NewRequest]
+Subject = "CN=ZeroLimit Dev"
+KeyLength = 2048
+KeyAlgorithm = RSA
+HashAlgorithm = SHA1
+MachineKeySet = False
+RequestType = Cert
+ValidityPeriod = Years
+ValidityPeriodUnits = 3
+ProviderName = "Microsoft Enhanced RSA and AES Cryptographic Provider"
+ProviderType = 24
+KeySpec = 2
+KeyUsage = 0x80
+SMIME = False
+Exportable = True
+FriendlyName = "ZeroLimit Dev"
+
+[EnhancedKeyUsageExtension]
+OID = 1.3.6.1.5.5.7.3.3
+"@
+
+$infPath     = "$env:TEMP\zerolimit-cert.inf"
+$certOutPath = "$env:TEMP\zerolimit-cert.crt"
+Set-Content -Path $infPath -Value $inf -Encoding ASCII
+& certreq.exe -new -q $infPath $certOutPath | Out-Null
+
+# CurrentUser\My から拾って PFX 化
+$created = Get-ChildItem -Path Cert:\CurrentUser\My |
+    Where-Object { $_.Subject -eq 'CN=ZeroLimit Dev' } |
+    Sort-Object NotBefore -Descending |
+    Select-Object -First 1
+
+$pwd = ConvertTo-SecureString -String $pfxPwdPlain -Force -AsPlainText
+Export-PfxCertificate -Cert $created -FilePath $pfxPath -Password $pwd | Out-Null
+
+Remove-Item $infPath, $certOutPath -Force -ErrorAction SilentlyContinue
 ```
+
+INF の要点:
+- `ProviderName = "Microsoft Enhanced RSA and AES Cryptographic Provider"` — **Legacy CSP を明示**（これが肝）
+- `ProviderType = 24` — PROV_RSA_AES（Enhanced CSP と対応）
+- `KeySpec = 2` — AT_SIGNATURE
+- `HashAlgorithm = SHA1` — wraptool が古い signtool を呼ぶためデフォルトは SHA-1 で出すのが安全
+- `[EnhancedKeyUsageExtension] OID = 1.3.6.1.5.5.7.3.3` — Code Signing EKU
 
 #### 保存先（build_windows.ps1 が参照する順）
 
@@ -268,13 +319,25 @@ if ($BuildAAX -and $env:PACE_EDEN_TOOLS) {
 }
 ```
 
-## WRAP GUIDの取得
+## WRAP GUID（= Wrap Config GUID）の取得
+
+### ⚠️ 落とし穴: Product GUID と Wrap Config GUID は別物
+
+PACE Central Web には **Product** と **Wrap Config** という別々のエンティティがあり、それぞれ独自の GUID を持つ。wraptool の `--wcguid` に渡すべきは **Wrap Config GUID**。Product の詳細ページに表示される "Product GUID" を渡すと次のエラーになる:
+
+```
+wraptool Error: pace::WrapToolException: Error attempting to get wrapper data from the server.
+WrapConfigNotFound: Provided wrapConfigGuid not found.
+```
+
+### 手順
 
 1. iLok License Manager アプリを起動してログイン（直接ブラウザで開いても認可されない）
 2. そこから PACE Central Web（https://pc2.paceap.com/）へ遷移
-3. "Products" → "Create New Product"
-4. 製品情報を入力
-5. 生成されたWRAP GUIDをメモ（プラグイン製品ごとに固有）
+3. サイドメニューで **"Products"** を開き、対象プラグインの Product を作成（または既存を選択）
+4. サイドメニューで **"Wrap Configs"** を開き、**"New Wrap Config"** でその Product に紐付けて作成
+5. 作成後に表示される **Wrap Config GUID**（フォーマットは 8-4-4-4-12 の UUID）をコピー
+6. `.env` の `PACE_ORGANIZATION` にこの値をセット
 
 ## 署名の確認
 

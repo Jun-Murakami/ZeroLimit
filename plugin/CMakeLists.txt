@@ -42,7 +42,7 @@ juce_add_plugin(ZeroLimit
     PLUGIN_CODE ZrLm
     FORMATS AU VST3 Standalone AAX
     PLUGIN_AU_MAIN_TYPE "aufx"
-    VST3_CATEGORIES "Fx|Dynamics|Limiter"
+    VST3_CATEGORIES "Fx" "Dynamics"
     AAX_CATEGORY "AAX_ePlugInCategory_Dynamics"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE

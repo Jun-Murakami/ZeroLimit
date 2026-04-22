@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Input, Slider, Typography } from '@mui/material';
 import { darken, lighten, styled } from '@mui/material/styles';
-import { getSliderState } from 'juce-framework-frontend-mirror';
+import { useJuceSliderValue } from '../hooks/useJuceParam';
 
 interface ParameterFaderProps {
   /** JUCE パラメータID（例: 'THRESHOLD', 'OUTPUT_GAIN'） */
@@ -137,45 +137,23 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
 }) => {
   const SLIDER_HEIGHT = sliderHeight ?? 160;
 
-  const sliderStateRef = useRef<ReturnType<typeof getSliderState> | null>(null);
-  if (sliderStateRef.current === null) sliderStateRef.current = getSliderState(parameterId) || null;
+  // APVTS からのリアクティブ購読。JUCE の scaled 値がそのまま真のソース。
+  const { value, state: sliderState, setScaled } = useJuceSliderValue(parameterId);
 
-  const readValue = (): number => {
-    const st = sliderStateRef.current;
-    if (!st) return min;
-    return fromNorm(st.getNormalisedValue(), min, max);
-  };
-
-  const [value, setValue] = useState<number>(readValue());
-  const [inputText, setInputText] = useState<string>(readValue().toFixed(1));
+  // 編集中だけローカル保持する input テキスト。それ以外は value から導出。
+  const [isEditing, setIsEditing] = useState(false);
+  const [inputText, setInputText] = useState<string>('');
   const [isDragging, setIsDragging] = useState(false);
 
+  // wheel ハンドラから最新値を参照するための Latest Ref Pattern
   const valueRef = useRef<number>(value);
-  useEffect(() => {
-    valueRef.current = value;
-  }, [value]);
-
-  // JUCE からの値変更を購読
-  useEffect(() => {
-    const st = sliderStateRef.current;
-    if (!st) return;
-    const id = st.valueChangedEvent.addListener(() => {
-      if (isDragging) return;
-      const v = fromNorm(st.getNormalisedValue(), min, max);
-      setValue(v);
-      setInputText(v.toFixed(1));
-    });
-    return () => {
-      st.valueChangedEvent.removeListener(id);
-    };
-  }, [isDragging, min, max]);
+  valueRef.current = value;
 
   const applyValue = (v: number) => {
-    const clamped = Math.max(min, Math.min(max, v));
-    setValue(clamped);
-    setInputText(clamped.toFixed(1));
-    sliderStateRef.current?.setNormalisedValue(toNorm(clamped, min, max));
+    setScaled(v, min, max);
   };
+
+  const displayInput = isEditing ? inputText : value.toFixed(1);
 
   const handleChange = (_: Event, v: number | number[]) => {
     const n = v as number; // 0..100
@@ -183,15 +161,18 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => setInputText(e.target.value);
-
+  const handleInputFocus = () => {
+    setIsEditing(true);
+    setInputText(valueRef.current.toFixed(1));
+  };
   const commitInput = () => {
+    setIsEditing(false);
     const parsed = parseFloat(inputText);
     if (!isNaN(parsed)) applyValue(parsed);
-    else setInputText(valueRef.current.toFixed(1));
   };
 
   const handleInputKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') commitInput();
+    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
   };
 
   const handleClickReset = (e: React.MouseEvent) => {
@@ -248,19 +229,19 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
               handleClickReset(e);
               if (!e.defaultPrevented) {
                 setIsDragging(true);
-                sliderStateRef.current?.sliderDragStarted();
+                sliderState?.sliderDragStarted();
               }
             }}
             onMouseUp={() => {
               if (isDragging) {
                 setIsDragging(false);
-                sliderStateRef.current?.sliderDragEnded();
+                sliderState?.sliderDragEnded();
               }
             }}
             onChangeCommitted={() => {
               if (isDragging) {
                 setIsDragging(false);
-                sliderStateRef.current?.sliderDragEnded();
+                sliderState?.sliderDragEnded();
               }
             }}
             min={0}
@@ -309,8 +290,9 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
           上端とほぼ同じ Y に合わせるための余白（slider の mb 14px 分だけでは足りない差分）。 */}
       <StyledInput
         className='block-host-shortcuts'
-        value={inputText}
+        value={displayInput}
         onChange={handleInputChange}
+        onFocus={handleInputFocus}
         onBlur={commitInput}
         onKeyDown={handleInputKeyDown}
         disableUnderline

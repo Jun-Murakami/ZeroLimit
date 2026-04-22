@@ -1,18 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, FormControlLabel, Slider, Switch, Typography, Input } from '@mui/material';
-import { getSliderState, getToggleState } from 'juce-framework-frontend-mirror';
+import { useJuceSliderValue, useJuceToggleValue } from '../hooks/useJuceParam';
 
 //
 //  Release セクション（Auto/Manual Release + 0.01..1000 ms 対数スライダー）
 //
-//  実装メモ：
-//   - 状態は releaseMs 一本に絞る。スライダーの値は毎レンダーで msToNorm(releaseMs) を計算して渡す。
-//   - JUCE の valueChangedEvent は自分の setNormalisedValue からも跳ね返ってくるため、
-//     自送信直後の ~150ms はエコーとみなして state を書き戻さない（`lastEchoAt` で判定）。
-//     これを怠ると：
-//       a) ドラッグ中に thumb が往復して激しくちらつく
-//       b) JUCE 側の浮動小数誤差で来る値が元の t と微妙にズレ、2 回目以降の grab で
-//          "MUI が見る value" と "実画面上の thumb 位置" がずれて飛ぶ
+//  状態の持ち方：
+//   - `releaseMs` は JUCE APVTS から useSyncExternalStore 経由でリアクティブに取得。
+//     自前 state は持たない。
+//   - スライダー値は render 時に msToNorm(releaseMs) を都度計算して MUI Slider に渡す。
+//   - input 表示値も render 時に formatMs(releaseMs) で導出（編集中は入力中文字列を優先）。
 //
 
 const formatMs = (ms: number): string => {
@@ -34,61 +31,23 @@ const normToMs = (t: number): number => {
   return MS_MIN * Math.pow(MS_MAX / MS_MIN, clamped);
 };
 
-// エコー抑制: 自分が setNormalisedValue した直後のこの期間は listener の state 書き戻しを無視する
-const ECHO_WINDOW_MS = 150;
-
 export const ReleaseSection: React.FC = () => {
-  const sliderState = getSliderState('RELEASE_MS');
-  const toggleState = getToggleState('AUTO_RELEASE');
-
-  const initialMs = sliderState ? sliderState.getScaledValue() : 1.0;
-  const [releaseMs, setReleaseMs] = useState<number>(initialMs);
-  const [autoRelease, setAutoRelease] = useState<boolean>(() => (toggleState ? toggleState.getValue() : true));
+  const { value: releaseMs, state: sliderState, setNormalised } = useJuceSliderValue('RELEASE_MS');
+  const { value: autoRelease, setValue: setAutoReleaseJuce } = useJuceToggleValue('AUTO_RELEASE', true);
 
   const [isEditing, setIsEditing] = useState(false);
-  const [inputValue, setInputValue] = useState<string>('');
+  const [inputText, setInputText] = useState<string>('');
   const [isDragging, setIsDragging] = useState(false);
 
-  // エコー抑制用タイムスタンプ
-  const suppressUntilRef = useRef<number>(0);
-
-  // JUCE → WebUI の値更新購読（外部変更のみ反映）
-  useEffect(() => {
-    if (!sliderState) return;
-    const id = sliderState.valueChangedEvent.addListener(() => {
-      if (Date.now() < suppressUntilRef.current) return; // 自送信のエコーは無視
-      setReleaseMs(sliderState.getScaledValue());
-    });
-    return () => sliderState.valueChangedEvent.removeListener(id);
-  }, [sliderState]);
-
-  useEffect(() => {
-    if (!toggleState) return;
-    const id = toggleState.valueChangedEvent.addListener(() => {
-      setAutoRelease(toggleState.getValue());
-    });
-    return () => toggleState.valueChangedEvent.removeListener(id);
-  }, [toggleState]);
-
-  // 表示用 input の同期
-  useEffect(() => {
-    if (!isEditing) setInputValue(formatMs(releaseMs).replace(' ms', '').trim());
-  }, [releaseMs, isEditing]);
-
+  // 最新値への参照（wheel native listener でのみ使う）
   const releaseMsRef = useRef<number>(releaseMs);
-  useEffect(() => {
-    releaseMsRef.current = releaseMs;
-  }, [releaseMs]);
+  releaseMsRef.current = releaseMs; // render で参照を同期（useEffect 不要）
 
-  // 値の書き込み（ローカル state + JUCE へ同期）。
-  //  - WebUI → JUCE の方向では、直後にエコーで戻ってくる自分の値で state が上書きされないよう
-  //    suppressUntil をセット。
+  // 書き込み: 正規化 0..1 を受けて JUCE に反映。
+  //  useSyncExternalStore が getSnapshot 経由で JUCE の実値を返すので、ローカル mirror 不要。
   const applyNormalised = (t: number) => {
     const clampedT = Math.max(0, Math.min(1, t));
-    const ms = normToMs(clampedT);
-    suppressUntilRef.current = Date.now() + ECHO_WINDOW_MS;
-    setReleaseMs(ms);
-    sliderState?.setNormalisedValue(clampedT);
+    setNormalised(clampedT);
   };
 
   const handleSliderChange = (_: Event, value: number | number[]) => {
@@ -112,9 +71,7 @@ export const ReleaseSection: React.FC = () => {
   };
 
   const handleToggleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.checked;
-    setAutoRelease(v);
-    toggleState?.setValue(v);
+    setAutoReleaseJuce(e.target.checked);
   };
 
   // ホイール（非パッシブ）
@@ -135,10 +92,12 @@ export const ReleaseSection: React.FC = () => {
     };
   }, [sliderState]);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => setInputValue(e.target.value);
+  // Input: 表示値は編集中だけローカル state、それ以外は releaseMs から導出
+  const displayInput = isEditing ? inputText : formatMs(releaseMs).replace(' ms', '').trim();
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => setInputText(e.target.value);
   const commitInput = () => {
     setIsEditing(false);
-    const parsed = parseFloat(inputValue);
+    const parsed = parseFloat(inputText);
     if (!isNaN(parsed) && parsed > 0) applyNormalised(msToNorm(parsed));
   };
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -146,7 +105,7 @@ export const ReleaseSection: React.FC = () => {
   };
   const handleInputFocus = () => {
     setIsEditing(true);
-    setInputValue(formatMs(releaseMs).replace(' ms', '').trim());
+    setInputText(formatMs(releaseMs).replace(' ms', '').trim());
   };
 
   const sliderValue = msToNorm(releaseMs);
@@ -175,7 +134,7 @@ export const ReleaseSection: React.FC = () => {
         <Box sx={{ display: 'flex', alignItems: 'center' }}>
           <Input
             className='block-host-shortcuts'
-            value={inputValue}
+            value={displayInput}
             onChange={handleInputChange}
             onBlur={commitInput}
             onFocus={handleInputFocus}

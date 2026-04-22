@@ -90,6 +90,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout ZeroLimitAudioProcessor::cre
         "Auto Release",
         true));
 
+    // LINK: Threshold と Output Gain を相対オフセットを保ったまま連動させるトグル。
+    //  実際の連動ロジックは WebUI 側で、有効時に双方の setNormalisedValue を呼び合う。
+    //  DSP には影響しない（状態の持続のみ）。
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        zl::id::LINK,
+        "Link",
+        false));
+
     return { params.begin(), params.end() };
 }
 
@@ -202,12 +210,16 @@ void ZeroLimitAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     const float minGain = limiter.processBlock(buffer);
     atomicMinFloat(minGainAccum, minGain);
 
-    // --- 出力ゲイン ---
-    const float outLin = std::pow(10.0f, outGainDb / 20.0f);
-    if (std::abs(outLin - 1.0f) > 1.0e-6f)
+    // --- Auto makeup gain + 出力ゲイン ---
+    //  Threshold を下げた分（-thresholdDb）だけリミッタ段後に自動で補償し、
+    //  そのうえでユーザー Output Gain を重ねる。
+    //  ピーク出力は 10^(outGainDb/20) 相当（= Threshold に依存しない）になる。
+    const float makeupDb = -thresholdDb;                     // thresholdDb <= 0 なので makeupDb >= 0
+    const float totalLin = std::pow(10.0f, (makeupDb + outGainDb) / 20.0f);
+    if (std::abs(totalLin - 1.0f) > 1.0e-6f)
     {
         for (int ch = 0; ch < numChannels; ++ch)
-            buffer.applyGain(ch, 0, numSamples, outLin);
+            buffer.applyGain(ch, 0, numSamples, totalLin);
     }
 
     // --- 出力段メータ（Peak + RMS）---

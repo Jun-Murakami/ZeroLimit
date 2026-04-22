@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Box, Button, Paper, Tooltip, Typography } from '@mui/material';
 import { CssBaseline, ThemeProvider } from '@mui/material';
-import { getComboBoxState } from 'juce-framework-frontend-mirror';
 import { juceBridge } from './bridge/juce';
+import { useJuceComboBoxIndex, useJuceSliderValue, useJuceToggleValue } from './hooks/useJuceParam';
 import { darkTheme } from './theme';
 import { ParameterFader } from './components/ParameterFader';
 import {
@@ -63,53 +63,185 @@ function App() {
   };
   const resetGrHold = () => setGrHold(0);
 
-  // METERING_MODE パラメータ（APVTS 側）と双方向バインド
-  const meteringCombo = getComboBoxState('METERING_MODE');
-  const [meterModeIndex, setMeterModeIndex] = useState<number>(() =>
-    meteringCombo ? meteringCombo.getChoiceIndex() : 0,
-  );
+  // METERING_MODE パラメータ（APVTS 側）を useSyncExternalStore 経由で購読
+  const { index: meterModeIndex, setIndex: setMeterModeIndexJuce } = useJuceComboBoxIndex('METERING_MODE');
   const meterMode: MeterMode = MODES[meterModeIndex] ?? 'peak';
 
-  useEffect(() => {
-    if (!meteringCombo) return;
-    const id = meteringCombo.valueChangedEvent.addListener(() => {
-      setMeterModeIndex(meteringCombo.getChoiceIndex());
-    });
-    return () => meteringCombo.valueChangedEvent.removeListener(id);
-  }, [meteringCombo]);
+  // モード切替時に古い state をリセットしてちらつきを防ぐ。
+  //  JUCE は選択モードに該当するデータしか送らないため、切替直後の一瞬、
+  //  UI は新モードで描画する一方で内部 state は旧モードの値のままになる。
+  //  そのフレームで一時的に旧値が新モード UI 上に露出するのがちらつきの正体。
+  //  切替ハンドラで新モード側の state を MIN に落としておけば、次の meterUpdate 到着で
+  //  フレッシュな値に置き換わるまでの 1 フレームは "無音" 表示になって自然。
+  const resetMetersForMode = (nextIndex: number) => {
+    if (nextIndex === 2) {
+      setInLkfs(MIN_LKFS);
+      setOutLkfs(MIN_LKFS);
+      setInLkfsHold(MIN_LKFS);
+      setOutLkfsHold(MIN_LKFS);
+    } else {
+      setInL(MIN_DB); setInR(MIN_DB);
+      setOutL(MIN_DB); setOutR(MIN_DB);
+      setInHold({ left: MIN_DB, right: MIN_DB });
+      setOutHold({ left: MIN_DB, right: MIN_DB });
+    }
+  };
 
   const cycleMeterMode = () => {
     const next = (meterModeIndex + 1) % MODES.length;
-    setMeterModeIndex(next);
-    meteringCombo?.setChoiceIndex(next);
+    resetMetersForMode(next);
+    setMeterModeIndexJuce(next);
   };
 
+  // ============================
+  // Threshold / Output Gain の Link 機能
+  // ============================
+  //   - Link ON の瞬間の (Output - Threshold) のオフセットを記憶し、
+  //     以降は片方を動かすともう片方も同じ delta だけ動く。
+  //   - どちらかがレンジ端 (-30..0) にぶつかったら、そちらをクランプ。
+  //     もう片方は継続可能（オフセット一時崩れ、戻れば回復）。
+  //   - JUCE からのエコーで無限ループしないように mirroring 中フラグを見る。
+  // Threshold / Output Gain / Link の購読（useSyncExternalStore 経由）。
+  //  ここでは state（JUCE state オブジェクト）を mirror 処理に使いたいので、
+  //  hook から参照を取り出す。value はモニタリング専用。
+  const { state: thresholdSlider } = useJuceSliderValue('THRESHOLD');
+  const { state: outputGainSlider } = useJuceSliderValue('OUTPUT_GAIN');
+  const { value: linkActive, setValue: setLinkJuce } = useJuceToggleValue('LINK');
+
+  // Link state を listener クロージャから参照するための ref
+  const linkActiveRef = useRef<boolean>(linkActive);
+  useEffect(() => {
+    linkActiveRef.current = linkActive;
+  }, [linkActive]);
+
+  // Link ON 時点の (Output - Threshold) オフセット
+  const deltaRef = useRef<number>(0);
+
+  // APVTS のレンジは THRESHOLD / OUTPUT_GAIN 共に -30..0 dB
+  const PARAM_MIN_DB = -30;
+  const PARAM_MAX_DB = 0;
+  const clampParamDb = (db: number): number => Math.max(PARAM_MIN_DB, Math.min(PARAM_MAX_DB, db));
+  const dbToNorm = (db: number): number => (clampParamDb(db) - PARAM_MIN_DB) / (PARAM_MAX_DB - PARAM_MIN_DB);
+
+  // ループ止めの 2 軸:
+  //   (1) idempotent: 書こうとしている値と相手の現在値が既に一致していればスキップ
+  //       → 平常時の echo が綺麗にループを自然終端させる
+  //   (2) suppress window: 書き込み直後の約 80ms は相手の listener を黙らせる
+  //       → ユーザーが T を連続ドラッグしたとき、非同期で後から届く O echo が
+  //          「過去の O 値」をベースに T を書き戻してしまう race を防ぐ
+  const SYNC_TOLERANCE_DB = 0.05;
+  const SUPPRESS_WINDOW_MS = 80;
+  const suppressThresholdUntilRef = useRef<number>(0);
+  const suppressOutputUntilRef    = useRef<number>(0);
+
+  // LINK が OFF→ON に変わる瞬間を検出して delta を更新する（DAW オートメーション対応）。
+  //  linkActive の reactive な値は useSyncExternalStore 側で既に担保済みなので、
+  //  ここでは副作用（delta 更新）だけを useEffect で処理する。
+  const prevLinkActiveRef = useRef<boolean>(linkActive);
+  useEffect(() => {
+    if (linkActive && ! prevLinkActiveRef.current) {
+      const tNow = thresholdSlider ? thresholdSlider.getScaledValue() : 0;
+      const oNow = outputGainSlider ? outputGainSlider.getScaledValue() : 0;
+      deltaRef.current = oNow - tNow;
+    }
+    prevLinkActiveRef.current = linkActive;
+  }, [linkActive, thresholdSlider, outputGainSlider]);
+
+  // Threshold 変化 → Output をミラー（必要な時のみ）
+  useEffect(() => {
+    if (!thresholdSlider || !outputGainSlider) return;
+    const id = thresholdSlider.valueChangedEvent.addListener(() => {
+      if (Date.now() < suppressThresholdUntilRef.current) return; // 自分で書いた echo は黙殺
+      if (! linkActiveRef.current) return;
+      const curT = thresholdSlider.getScaledValue();
+      const curO = outputGainSlider.getScaledValue();
+      const desiredO = clampParamDb(curT + deltaRef.current);
+      if (Math.abs(curO - desiredO) < SYNC_TOLERANCE_DB) return;
+      suppressOutputUntilRef.current = Date.now() + SUPPRESS_WINDOW_MS;
+      outputGainSlider.setNormalisedValue(dbToNorm(desiredO));
+    });
+    return () => thresholdSlider.valueChangedEvent.removeListener(id);
+  }, [thresholdSlider, outputGainSlider]);
+
+  // Output 変化 → Threshold をミラー（必要な時のみ）
+  useEffect(() => {
+    if (!thresholdSlider || !outputGainSlider) return;
+    const id = outputGainSlider.valueChangedEvent.addListener(() => {
+      if (Date.now() < suppressOutputUntilRef.current) return;
+      if (! linkActiveRef.current) return;
+      const curO = outputGainSlider.getScaledValue();
+      const curT = thresholdSlider.getScaledValue();
+      const desiredT = clampParamDb(curO - deltaRef.current);
+      if (Math.abs(curT - desiredT) < SYNC_TOLERANCE_DB) return;
+      suppressThresholdUntilRef.current = Date.now() + SUPPRESS_WINDOW_MS;
+      thresholdSlider.setNormalisedValue(dbToNorm(desiredT));
+    });
+    return () => outputGainSlider.valueChangedEvent.removeListener(id);
+  }, [thresholdSlider, outputGainSlider]);
+
+  const toggleLink = () => {
+    const next = ! linkActive;
+    if (next) {
+      // setLinkJuce 呼び出しの前に delta を確定させておくことで、
+      //  直後に飛んでくる valueChangedEvent に依存せず一貫した値になる
+      const tNow = thresholdSlider ? thresholdSlider.getScaledValue() : 0;
+      const oNow = outputGainSlider ? outputGainSlider.getScaledValue() : 0;
+      deltaRef.current = oNow - tNow;
+    }
+    setLinkJuce(next);
+  };
+
+  // 直近の meteringMode を ref で保持。DAW オートメーション等で外部からモードが
+  //  変わったとき、"新モード × 旧値" の 1 フレームを防ぐために値リセットを挟む。
+  const lastMeterModeRef = useRef<number>(meterModeIndex);
   useEffect(() => {
     const id = juceBridge.addEventListener('meterUpdate', (d: unknown) => {
       const m = d as MeterUpdateData;
-      if (typeof m.meteringMode === 'number') setMeterModeIndex(m.meteringMode);
+      const mode = typeof m.meteringMode === 'number' ? m.meteringMode : lastMeterModeRef.current;
 
-      if (m.meteringMode === 2) {
+      // モード変化を検出したら、その新モード側の state を一旦 MIN にしてからフレッシュ値を入れる。
+      if (mode !== lastMeterModeRef.current) {
+        lastMeterModeRef.current = mode;
+        if (mode === 2) {
+          setInLkfs(MIN_LKFS); setOutLkfs(MIN_LKFS);
+          setInLkfsHold(MIN_LKFS); setOutLkfsHold(MIN_LKFS);
+        } else {
+          setInL(MIN_DB); setInR(MIN_DB); setOutL(MIN_DB); setOutR(MIN_DB);
+          setInHold({ left: MIN_DB, right: MIN_DB });
+          setOutHold({ left: MIN_DB, right: MIN_DB });
+        }
+      }
+
+      if (mode === 2) {
         const iL = m.input?.momentary ?? MIN_LKFS;
         const oL = m.output?.momentary ?? MIN_LKFS;
         setInLkfs(iL);
         setOutLkfs(oL);
-        setInLkfsHold((p) => Math.max(p, clampLkfs(iL)));
-        setOutLkfsHold((p) => Math.max(p, clampLkfs(oL)));
+        setInLkfsHold((p) => (iL > p ? clampLkfs(iL) : p));
+        setOutLkfsHold((p) => (oL > p ? clampLkfs(oL) : p));
       } else {
-        const isRms = m.meteringMode === 1;
+        const isRms = mode === 1;
         const iL = (isRms ? m.input?.rmsLeft  : m.input?.truePeakLeft)  ?? MIN_DB;
         const iR = (isRms ? m.input?.rmsRight : m.input?.truePeakRight) ?? MIN_DB;
         const oL = (isRms ? m.output?.rmsLeft  : m.output?.truePeakLeft)  ?? MIN_DB;
         const oR = (isRms ? m.output?.rmsRight : m.output?.truePeakRight) ?? MIN_DB;
         setInL(iL); setInR(iR); setOutL(oL); setOutR(oR);
-        setInHold((p)  => ({ left: Math.max(p.left, clampDb(iL)), right: Math.max(p.right, clampDb(iR)) }));
-        setOutHold((p) => ({ left: Math.max(p.left, clampDb(oL)), right: Math.max(p.right, clampDb(oR)) }));
+        // hold 値は変化があった時のみ新オブジェクトを返して不要な再レンダーを抑える
+        setInHold((p) => {
+          const left = Math.max(p.left, clampDb(iL));
+          const right = Math.max(p.right, clampDb(iR));
+          return left === p.left && right === p.right ? p : { left, right };
+        });
+        setOutHold((p) => {
+          const left = Math.max(p.left, clampDb(oL));
+          const right = Math.max(p.right, clampDb(oR));
+          return left === p.left && right === p.right ? p : { left, right };
+        });
       }
 
       const gr = m.grDb ?? 0;
       setGrDb(gr);
-      setGrHold((p) => Math.max(p, gr));
+      setGrHold((p) => (gr > p ? gr : p));
     });
     return () => juceBridge.removeEventListener(id);
   }, []);
@@ -176,8 +308,9 @@ function App() {
     if (!dragState.current) return;
     const dx = e.clientX - dragState.current.startX;
     const dy = e.clientY - dragState.current.startY;
-    const w = Math.max(392, dragState.current.startW + dx);
-    const h = Math.max(320, dragState.current.startH + dy);
+    // C++ 側 PluginEditor の kMinWidth / kMinHeight と合わせる
+    const w = Math.max(410, dragState.current.startW + dx);
+    const h = Math.max(390, dragState.current.startH + dy);
     if (!window.__resizeRAF) {
       window.__resizeRAF = requestAnimationFrame(() => {
         window.__resizeRAF = 0;
@@ -193,6 +326,23 @@ function App() {
     <ThemeProvider theme={darkTheme}>
       <CssBaseline />
       <style>{`
+        /* 右下リサイズハンドルの視覚（ドット 3 つを斜めに並べる） */
+        #resizeHandle::after {
+          content: '';
+          position: absolute;
+          right: 4px;
+          top: 8px;
+          width: 2px;
+          height: 2px;
+          background: rgba(79, 195, 247, 1);
+          border-radius: 1px;
+          pointer-events: none;
+          box-shadow:
+            -4px 4px 0 0 rgba(79, 195, 247, 1),
+            -8px 8px 0 0 rgba(79, 195, 247, 1),
+            -1px 7px 0 0 rgba(79, 195, 247, 1);
+        }
+
         html, body, #root {
           -webkit-user-select: none;
           -ms-user-select: none;
@@ -251,8 +401,52 @@ function App() {
               gridTemplateColumns: 'auto 1fr auto',
               gap: 2,
               alignItems: 'flex-start',
+              position: 'relative',
             }}
           >
+            {/* Threshold と Output Gain の Link トグル。
+                THRESHOLD / OUTPUT ラベルの行と同じ Y に、主画面の水平中央に配置する。 */}
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 2,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.25,
+                userSelect: 'none',
+              }}
+            >
+              <Tooltip title='Link Threshold ⇔ Output Gain' arrow>
+                <Button
+                  onClick={toggleLink}
+                  size='small'
+                  variant='contained'
+                  aria-pressed={linkActive}
+                  sx={{
+                    minWidth: 'auto',
+                    px: 1,
+                    py: 0.1,
+                    height: 22,
+                    fontSize: '0.72rem',
+                    textTransform: 'none',
+                    letterSpacing: 0.5,
+                    border: '1px solid',
+                    borderColor: linkActive ? 'primary.main' : 'divider',
+                    backgroundColor: linkActive ? 'primary.main' : 'transparent',
+                    color: linkActive ? 'background.paper' : 'text.secondary',
+                    '&:hover': {
+                      backgroundColor: linkActive ? 'primary.dark' : 'grey.700',
+                    },
+                  }}
+                >
+                  {'‹ Link ›'}
+                </Button>
+              </Tooltip>
+            </Box>
+
             {/* 左: Threshold フェーダー */}
             <ParameterFader
               parameterId='THRESHOLD'
@@ -282,10 +476,10 @@ function App() {
               {/* メーター 3 列を隣接させる（列幅を固定して左右にズレないように） */}
               <Box sx={{ display: 'flex', gap: 0.25, alignItems: 'flex-start' }}>
                 {/* IN */}
-                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 52 }}>
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: meterColumnWidth }}>
                   {meterMode === 'momentary' ? (
                     <>
-                      <LoudnessMeterBar lkfs={inLkfs} label='IN' />
+                      <LoudnessMeterBar lkfs={inLkfs} label='IN' width={meterColumnWidth} height={meterAndFaderHeight} />
                       <Tooltip title='Reset Hold'>
                         <Box
                         onClick={resetInHold}
@@ -299,7 +493,7 @@ function App() {
                           userSelect: 'none',
                         }}
                       >
-                          <Typography variant='caption' sx={{ fontSize: '10px', width: 52, textAlign: 'center', lineHeight: 1 }}>
+                          <Typography variant='caption' sx={{ fontSize: '10px', width: meterColumnWidth, textAlign: 'center', lineHeight: 1 }}>
                             {formatLkfs(inLkfsHold)}
                           </Typography>
                         </Box>
@@ -309,8 +503,8 @@ function App() {
                     <>
                       {/* バーと "L IN R" ラベル行。IN は中央に絶対配置 */}
                       <Box sx={{ position: 'relative', display: 'flex', gap: 0.25 }}>
-                        <LevelMeterBar level={inL} label='L' />
-                        <LevelMeterBar level={inR} label='R' />
+                        <LevelMeterBar level={inL} label='L' width={levelBarWidth} height={meterAndFaderHeight} />
+                        <LevelMeterBar level={inR} label='R' width={levelBarWidth} height={meterAndFaderHeight} />
                         <Typography
                           sx={{
                             position: 'absolute',
@@ -342,10 +536,10 @@ function App() {
                             userSelect: 'none',
                           }}
                         >
-                          <Typography variant='caption' sx={{ fontSize: '10px', width: 24, textAlign: 'center', lineHeight: 1 }}>
+                          <Typography variant='caption' sx={{ fontSize: '10px', width: levelBarWidth, textAlign: 'center', lineHeight: 1 }}>
                             {formatDb(inHold.left)}
                           </Typography>
-                          <Typography variant='caption' sx={{ fontSize: '10px', width: 24, textAlign: 'center', lineHeight: 1 }}>
+                          <Typography variant='caption' sx={{ fontSize: '10px', width: levelBarWidth, textAlign: 'center', lineHeight: 1 }}>
                             {formatDb(inHold.right)}
                           </Typography>
                         </Box>
@@ -356,7 +550,7 @@ function App() {
 
                 {/* GR */}
                 <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  <GainReductionMeterBar grDb={grDb} />
+                  <GainReductionMeterBar grDb={grDb} height={meterAndFaderHeight} />
                   <Tooltip title='Reset Hold'>
                     <Box
                       onClick={resetGrHold}
@@ -378,10 +572,10 @@ function App() {
                 </Box>
 
                 {/* OUT */}
-                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 52 }}>
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: meterColumnWidth }}>
                   {meterMode === 'momentary' ? (
                     <>
-                      <LoudnessMeterBar lkfs={outLkfs} label='OUT' />
+                      <LoudnessMeterBar lkfs={outLkfs} label='OUT' width={meterColumnWidth} height={meterAndFaderHeight} />
                       <Tooltip title='Reset Hold'>
                         <Box
                         onClick={resetOutHold}
@@ -395,7 +589,7 @@ function App() {
                           userSelect: 'none',
                         }}
                       >
-                          <Typography variant='caption' sx={{ fontSize: '10px', width: 52, textAlign: 'center', lineHeight: 1 }}>
+                          <Typography variant='caption' sx={{ fontSize: '10px', width: meterColumnWidth, textAlign: 'center', lineHeight: 1 }}>
                             {formatLkfs(outLkfsHold)}
                           </Typography>
                         </Box>
@@ -404,8 +598,8 @@ function App() {
                   ) : (
                     <>
                       <Box sx={{ position: 'relative', display: 'flex', gap: 0.25 }}>
-                        <LevelMeterBar level={outL} label='L' />
-                        <LevelMeterBar level={outR} label='R' />
+                        <LevelMeterBar level={outL} label='L' width={levelBarWidth} height={meterAndFaderHeight} />
+                        <LevelMeterBar level={outR} label='R' width={levelBarWidth} height={meterAndFaderHeight} />
                         <Typography
                           sx={{
                             position: 'absolute',
@@ -437,10 +631,10 @@ function App() {
                             userSelect: 'none',
                           }}
                         >
-                          <Typography variant='caption' sx={{ fontSize: '10px', width: 24, textAlign: 'center', lineHeight: 1 }}>
+                          <Typography variant='caption' sx={{ fontSize: '10px', width: levelBarWidth, textAlign: 'center', lineHeight: 1 }}>
                             {formatDb(outHold.left)}
                           </Typography>
-                          <Typography variant='caption' sx={{ fontSize: '10px', width: 24, textAlign: 'center', lineHeight: 1 }}>
+                          <Typography variant='caption' sx={{ fontSize: '10px', width: levelBarWidth, textAlign: 'center', lineHeight: 1 }}>
                             {formatDb(outHold.right)}
                           </Typography>
                         </Box>
@@ -505,8 +699,9 @@ function App() {
           <ReleaseSection />
         </Paper>
 
-        {/* リサイズハンドル */}
+        {/* リサイズハンドル（視覚は #resizeHandle::after で描画） */}
         <div
+          id='resizeHandle'
           onPointerDown={onDragStart}
           onPointerMove={onDrag}
           onPointerUp={onDragEnd}
@@ -518,6 +713,7 @@ function App() {
             height: 24,
             cursor: 'nwse-resize',
             zIndex: 2147483647,
+            backgroundColor: 'transparent',
           }}
           title='Resize'
         />
