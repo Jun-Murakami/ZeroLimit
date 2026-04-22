@@ -26,16 +26,17 @@
 3. PACE Centralをインストール
 4. iLok USBを接続
 
-### 3. PACE Developer Portalへのアクセス
+### 3. PACE Central Web（開発者ポータル）へのアクセス
 
 1. Avidから承認メールが届いたら、PACEからも開発者アクセスの招待メールが届く
-2. https://developer.pace.com でログイン
-3. Developer Subscription（通常$500/年）が無料でアクティベートされていることを確認
+2. **iLok License Manager アプリを起動してログイン**（ポータルへ直接ブラウザで飛んでも開けないので、必ずここから）
+3. アプリの画面（または招待メール内のリンク）から PACE Central Web へ遷移: https://pc2.paceap.com/
+4. Developer Subscription（通常$500/年）が無料でアクティベートされていることを確認
 
 ### 4. Eden Toolsのダウンロードとセットアップ
 
 ```bash
-# PACE Developer Portalから最新版をダウンロード
+# PACE Central Web（https://pc2.paceap.com/ ・iLok License Manager 経由でログイン）から最新版をダウンロード
 # Windows: eden_tools_windows_x.x.x.zip
 # macOS: eden_tools_macos_x.x.x.dmg
 ```
@@ -65,7 +66,7 @@ echo 'export PATH="$PATH:$PACE_EDEN_TOOLS/bin"' >> ~/.zshrc
 
 ```bash
 # iLok USBが接続されていることを確認
-# PACE Developer Portalで証明書を生成
+# PACE Central Web（https://pc2.paceap.com/ ・iLok License Manager 経由でログイン）で証明書を生成
 
 # 1. ログイン
 pace_eden login --account YOUR_ILOK_ACCOUNT
@@ -86,7 +87,7 @@ param(
     
     [string]$OutputPath = "",
     
-    [string]$WrapGuid = "YOUR_WRAP_GUID_HERE"  # PACE Portalで生成
+    [string]$WrapGuid = "YOUR_WRAP_GUID_HERE"  # PACE Central Web（https://pc2.paceap.com/）で生成
 )
 
 # Eden Toolsのパスを確認
@@ -151,7 +152,7 @@ fi
 
 AAX_PATH="$1"
 OUTPUT_PATH="${2:-}"
-WRAP_GUID="YOUR_WRAP_GUID_HERE"  # PACE Portalで生成
+WRAP_GUID="YOUR_WRAP_GUID_HERE"  # PACE Central Web（https://pc2.paceap.com/）で生成
 
 # Eden Toolsパス確認
 if [ -z "$PACE_EDEN_TOOLS" ]; then
@@ -216,10 +217,11 @@ if ($BuildAAX -and $env:PACE_EDEN_TOOLS) {
 
 ## WRAP GUIDの取得
 
-1. PACE Developer Portalにログイン
-2. "Products" → "Create New Product"
-3. 製品情報を入力
-4. 生成されたWRAP GUIDをメモ
+1. iLok License Manager アプリを起動してログイン（直接ブラウザで開いても認可されない）
+2. そこから PACE Central Web（https://pc2.paceap.com/）へ遷移
+3. "Products" → "Create New Product"
+4. 製品情報を入力
+5. 生成されたWRAP GUIDをメモ（プラグイン製品ごとに固有）
 
 ## 署名の確認
 
@@ -243,7 +245,7 @@ wraptool verify --in "ZeroLimit_signed.aaxplugin"
    - `pace_eden certificate list`で証明書を確認
 
 2. **"Invalid WRAP GUID"**
-   - PACE Developer PortalでWRAP GUIDを再確認
+   - PACE Central Web（https://pc2.paceap.com/）でWRAP GUIDを再確認
    - 製品が正しく登録されているか確認
 
 3. **"Failed to sign: -2147024891"**
@@ -282,7 +284,7 @@ wraptool verify --in "ZeroLimit_signed.aaxplugin"
 
 ## 参考リンク
 
-- [PACE Developer Portal](https://developer.pace.com)
+- [PACE Central Web](https://pc2.paceap.com/) — iLok License Manager アプリからログインして遷移する必要あり
 - [Avid AAX Developer](https://developer.avid.com/aax/)
 - [iLok License Manager](https://www.ilok.com)
 - [AAX SDK Documentation](http://developer.avid.com/aax/documentation)

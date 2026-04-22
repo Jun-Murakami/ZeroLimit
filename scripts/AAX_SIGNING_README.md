@@ -55,9 +55,9 @@ This error typically indicates authentication issues:
    - PACE servers: pace.com ports 443, 8080
 
 3. **Validate WCGUID**
-   - Must be registered in your PACE developer account
+   - Must be registered in your PACE developer account (per-plugin, unique)
    - Format: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
-   - Check at: https://developer.avid.com
+   - Check at: https://pc2.paceap.com/ (PACE Central Web — must sign in via the iLok License Manager app first; direct browser access is not authorised)
 
 4. **Certificate Issues**
    - Certificate must be valid and not expired
