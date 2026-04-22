@@ -391,10 +391,14 @@ fi
 if [[ ${BUILD_AAX} -eq 1 ]]; then
     echo_header "Step 3.5: PACE Eden 署名 (AAX macOS)"
 
-    # ZeroLimit 用の WCGUID は PACE 側で別途登録が必要。既定値は未設定。
-    # 使用時は環境変数 PACE_WCGUID に自身の GUID を設定してください。
-    PACE_WCGUID_DEFAULT=""
-    PACE_WCGUID_EFFECTIVE="${PACE_WCGUID:-${PACE_WCGUID_DEFAULT}}"
+    # PACE アカウント情報と WCGUID は .env (または環境変数) から取得。
+    # Windows 側 build_windows.ps1 と揃えた変数名セット:
+    #   PACE_USERNAME     : iLok アカウント名
+    #   PACE_PASSWORD     : iLok パスワード
+    #   PACE_ORGANIZATION : PACE Central Web で発行された WCGUID (プラグインごとに固有)
+    # 旧スクリプト互換のため PACE_WCGUID が設定されていて PACE_ORGANIZATION が未設定なら
+    # それを採用する。
+    PACE_ORGANIZATION_EFFECTIVE="${PACE_ORGANIZATION:-${PACE_WCGUID:-}}"
 
     # Guess wraptool location (can be overridden)
     WRAPTOOL_PATH_CANDIDATES=()
@@ -418,12 +422,18 @@ if [[ ${BUILD_AAX} -eq 1 ]]; then
         fi
     done
 
+    # 必須環境変数チェック（Windows 側と同じセット）
+    MISSING_PACE_VARS=()
+    [[ -z "${PACE_USERNAME:-}" ]]              && MISSING_PACE_VARS+=("PACE_USERNAME")
+    [[ -z "${PACE_PASSWORD:-}" ]]              && MISSING_PACE_VARS+=("PACE_PASSWORD")
+    [[ -z "${PACE_ORGANIZATION_EFFECTIVE}" ]]  && MISSING_PACE_VARS+=("PACE_ORGANIZATION")
+
     if [[ -z "${FOUND_WRAPTOOL}" ]]; then
         echo -e "${color_yellow}wraptool not found. Skipping AAX PACE signing.${color_reset}"
         echo -e "${color_gray}Please set WRAPTOOL_PATH environment variable.${color_reset}"
-    elif [[ -z "${PACE_WCGUID_EFFECTIVE}" ]]; then
-        echo -e "${color_yellow}PACE_WCGUID not set. Skipping AAX PACE signing.${color_reset}"
-        echo -e "${color_gray}Set the PACE_WCGUID environment variable to your plugin's WCGUID registered with PACE.${color_reset}"
+    elif (( ${#MISSING_PACE_VARS[@]} > 0 )); then
+        echo -e "${color_yellow}Missing PACE credentials: ${MISSING_PACE_VARS[*]}. Skipping AAX PACE signing.${color_reset}"
+        echo -e "${color_gray}Set them in .env (project root) or export them in your shell.${color_reset}"
     else
         echo_step "Using wraptool to apply iLok signing to AAX..."
 
@@ -431,9 +441,9 @@ if [[ ${BUILD_AAX} -eq 1 ]]; then
         WRAP_ARGS=(
             sign
             --verbose
-            --account bucketrelay
-            --password crimson
-            --wcguid "${PACE_WCGUID_EFFECTIVE}"
+            --account "${PACE_USERNAME}"
+            --password "${PACE_PASSWORD}"
+            --wcguid "${PACE_ORGANIZATION_EFFECTIVE}"
             --signid "${CODESIGN_IDENTITY}"
             --dsigharden
             --dsig1-compat on
@@ -441,8 +451,8 @@ if [[ ${BUILD_AAX} -eq 1 ]]; then
             --out "${DEST_AAX}"
         )
 
-
-        echo -e "${color_gray}wraptool command: ${FOUND_WRAPTOOL} ${WRAP_ARGS[*]}${color_reset}"
+        # パスワードをログに出さないよう、コマンドダンプは抑制する
+        echo -e "${color_gray}wraptool command: ${FOUND_WRAPTOOL} sign --verbose --account ${PACE_USERNAME} --password *** --wcguid ${PACE_ORGANIZATION_EFFECTIVE} --signid ${CODESIGN_IDENTITY} --dsigharden --dsig1-compat on --in ${DEST_AAX} --out ${DEST_AAX}${color_reset}"
         if ! "${FOUND_WRAPTOOL}" "${WRAP_ARGS[@]}"; then
             echo -e "${color_yellow}Warning: AAX PACE signing failed (continuing with unsigned version).${color_reset}"
         else
