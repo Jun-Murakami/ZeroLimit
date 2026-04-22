@@ -181,12 +181,14 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
       webAutoReleaseRelay  { zl::id::AUTO_RELEASE.getParamID() },
       webLinkRelay         { zl::id::LINK.getParamID() },
       webMeteringModeRelay { zl::id::METERING_MODE.getParamID() },
+      webModeRelay         { zl::id::MODE.getParamID() },
       thresholdAttachment    { *p.getState().getParameter(zl::id::THRESHOLD.getParamID()),     webThresholdRelay,    nullptr },
       outputGainAttachment   { *p.getState().getParameter(zl::id::OUTPUT_GAIN.getParamID()),   webOutputGainRelay,   nullptr },
       releaseMsAttachment    { *p.getState().getParameter(zl::id::RELEASE_MS.getParamID()),    webReleaseMsRelay,    nullptr },
       autoReleaseAttachment  { *p.getState().getParameter(zl::id::AUTO_RELEASE.getParamID()),  webAutoReleaseRelay,  nullptr },
       linkAttachment         { *p.getState().getParameter(zl::id::LINK.getParamID()),          webLinkRelay,         nullptr },
       meteringModeAttachment { *p.getState().getParameter(zl::id::METERING_MODE.getParamID()), webMeteringModeRelay, nullptr },
+      modeAttachment         { *p.getState().getParameter(zl::id::MODE.getParamID()),          webModeRelay,         nullptr },
       webView{
           // ProTools Windows 等、DPI 非対応ホストで WebView2 の自動スケーリングを抑止する
           makeWebViewOptionsWithPreLaunchArgs(p)
@@ -208,6 +210,7 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
               .withOptionsFrom(webAutoReleaseRelay)
               .withOptionsFrom(webLinkRelay)
               .withOptionsFrom(webMeteringModeRelay)
+              .withOptionsFrom(webModeRelay)
               .withNativeFunction(
                   juce::Identifier{"system_action"},
                   [this](const juce::Array<juce::var>& args,

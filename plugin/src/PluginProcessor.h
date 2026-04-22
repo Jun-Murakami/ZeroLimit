@@ -8,6 +8,7 @@
 #include "ParameterIDs.h"
 #include "dsp/Limiter.h"
 #include "dsp/MomentaryProcessor.h"
+#include "dsp/MultibandLimiter.h"
 
 class ZeroLimitAudioProcessor : public juce::AudioProcessor
 {
@@ -76,6 +77,10 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     zl::dsp::ZeroLatencyLimiter limiter;
+
+    // マルチバンドモード専用。3 バンド LR4 分解 + 各バンド独立リミッタ。
+    //  サム後には上の `limiter` を最終セーフティとしてもう一度適用する。
+    zl::dsp::MultibandLimiter multibandLimiter;
 
     // processBlock で入力信号を保持するための作業用バッファ
     //  - 出力段リミッタが in-place で書き換えるため、入力側メータ/Momentary 用に複製を取る

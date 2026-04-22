@@ -10,10 +10,13 @@ namespace zl::id {
     // - RELEASE_MS: 手動リリース時定数（0.01..1000 ms、log skew、既定 1.0）
     // - AUTO_RELEASE: プログラム依存リリース（既定 ON）
     // - LINK: Threshold と Output Gain を相対オフセット固定で連動させる（既定 OFF）
+    // - MODE: Single / Multi バンドモード切替（0=Single, 1=Multi、既定 Single）
+    //         Multi 時は AUTO_RELEASE を強制 ON として扱い、手動 RELEASE_MS は無視される。
     const juce::ParameterID THRESHOLD{"THRESHOLD", 1};
     const juce::ParameterID OUTPUT_GAIN{"OUTPUT_GAIN", 1};
     const juce::ParameterID METERING_MODE{"METERING_MODE", 1};
     const juce::ParameterID RELEASE_MS{"RELEASE_MS", 1};
     const juce::ParameterID AUTO_RELEASE{"AUTO_RELEASE", 1};
     const juce::ParameterID LINK{"LINK", 1};
+    const juce::ParameterID MODE{"MODE", 1};
 }  // namespace zl::id

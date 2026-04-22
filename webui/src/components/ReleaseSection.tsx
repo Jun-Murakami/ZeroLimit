@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, FormControlLabel, Slider, Switch, Typography, Input } from '@mui/material';
-import { useJuceSliderValue, useJuceToggleValue } from '../hooks/useJuceParam';
+import { useJuceComboBoxIndex, useJuceSliderValue, useJuceToggleValue } from '../hooks/useJuceParam';
 
 //
 //  Release セクション（Auto/Manual Release + 0.01..1000 ms 対数スライダー）
@@ -34,6 +34,9 @@ const normToMs = (t: number): number => {
 export const ReleaseSection: React.FC = () => {
   const { value: releaseMs, state: sliderState, setNormalised } = useJuceSliderValue('RELEASE_MS');
   const { value: autoRelease, setValue: setAutoReleaseJuce } = useJuceToggleValue('AUTO_RELEASE', true);
+  // Single / Multi バンドモード。Multi 時はこのセクション全体が効かなくなる（強制 Auto Release）。
+  const { index: modeIndex, setIndex: setModeIndex } = useJuceComboBoxIndex('MODE');
+  const multiMode = modeIndex === 1;
 
   const [isEditing, setIsEditing] = useState(false);
   const [inputText, setInputText] = useState<string>('');
@@ -118,6 +121,11 @@ export const ReleaseSection: React.FC = () => {
 
   const sliderValue = msToNorm(releaseMs);
 
+  // Multi モード時は Release セクション全体を半透明化して操作不能にする。
+  //  （Auto Release は DSP 側で強制 ON、バンドごとに最適化された時定数が使われる）
+  const releaseSectionOpacity = multiMode ? 0.4 : 1.0;
+  const releaseSectionDisabled = multiMode;
+
   return (
     <Box
       sx={{
@@ -129,13 +137,22 @@ export const ReleaseSection: React.FC = () => {
         p: 1,
       }}
     >
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          opacity: releaseSectionOpacity,
+          transition: 'opacity 120ms',
+          pointerEvents: releaseSectionDisabled ? 'none' : 'auto',
+        }}
+      >
         <FormControlLabel
-          control={<Switch checked={autoRelease} onChange={handleToggleChange} size='small' />}
-          label={autoRelease ? 'Auto Release' : 'Manual Release'}
+          control={<Switch checked={autoRelease} onChange={handleToggleChange} size='small' disabled={releaseSectionDisabled} />}
+          label={multiMode ? 'Auto (Multi-band)' : (autoRelease ? 'Auto Release' : 'Manual Release')}
           sx={{
             m: 0,
-            color: autoRelease ? 'text.primary' : 'text.secondary',
+            color: autoRelease || multiMode ? 'text.primary' : 'text.secondary',
             '& .MuiFormControlLabel-label': { fontSize: '0.875rem' },
           }}
         />
@@ -148,6 +165,7 @@ export const ReleaseSection: React.FC = () => {
             onFocus={handleInputFocus}
             onKeyDown={handleInputKeyDown}
             size='small'
+            disabled={releaseSectionDisabled}
             sx={{
               width: 64,
               fontFamily: '"Red Hat Mono", monospace',
@@ -163,7 +181,15 @@ export const ReleaseSection: React.FC = () => {
           </Typography>
         </Box>
       </Box>
-      <Box sx={{ px: 1, opacity: autoRelease ? 0.5 : 1.0, transition: 'opacity 120ms' }} ref={wheelRef}>
+      <Box
+        sx={{
+          px: 1,
+          opacity: (autoRelease || multiMode) ? 0.5 * releaseSectionOpacity : 1.0 * releaseSectionOpacity,
+          transition: 'opacity 120ms',
+          pointerEvents: releaseSectionDisabled ? 'none' : 'auto',
+        }}
+        ref={wheelRef}
+      >
         <Slider
           value={sliderValue}
           onChange={handleSliderChange}
@@ -207,6 +233,35 @@ export const ReleaseSection: React.FC = () => {
             { value: 1.0, label: '1000' },
           ]}
         />
+      </Box>
+
+      {/* 分割線。Release セクションと Mode セクションを視覚的に区切る */}
+      <Box sx={{ mt: 1, mb: 0.5, borderTop: '1px solid', borderColor: 'divider' }} />
+
+      {/* Single / Multi バンドモード切替。
+          Multi はゼロレイテンシー 3 バンド LR4 クロスオーバー（120 Hz / 5 kHz）で、
+          各バンドが独立リミッタ（Auto Release 強制、バンド固有の時定数）を持つ。 */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={multiMode}
+              onChange={(e) => setModeIndex(e.target.checked ? 1 : 0)}
+              size='small'
+            />
+          }
+          label={multiMode ? 'Multi-band' : 'Single-band'}
+          sx={{
+            m: 0,
+            color: multiMode ? 'primary.main' : 'text.primary',
+            '& .MuiFormControlLabel-label': { fontSize: '0.875rem', fontWeight: multiMode ? 600 : 400 },
+          }}
+        />
+        {multiMode && (
+          <Typography variant='caption' sx={{ fontSize: '0.7rem', color: 'text.secondary', fontStyle: 'italic' }}>
+            LR4 @ 120 Hz / 5 kHz
+          </Typography>
+        )}
       </Box>
     </Box>
   );

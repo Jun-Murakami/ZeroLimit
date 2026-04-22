@@ -98,6 +98,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout ZeroLimitAudioProcessor::cre
         "Link",
         false));
 
+    // MODE: Single / Multi バンドモード切替。
+    //  Multi は 3 バンド LR4 クロスオーバー（120 Hz / 5 kHz）+ バンド毎独立リミッタ。
+    //  Multi 時は自動的に Auto Release として振る舞い、手動 RELEASE_MS は無視される。
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        zl::id::MODE,
+        "Mode",
+        juce::StringArray{ "Single", "Multi" },
+        0));
+
     return { params.begin(), params.end() };
 }
 
@@ -116,9 +125,13 @@ void ZeroLimitAudioProcessor::changeProgramName(int, const juce::String&) {}
 void ZeroLimitAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     limiter.prepare(sampleRate, getTotalNumOutputChannels());
+    multibandLimiter.prepare(sampleRate, getTotalNumOutputChannels(), samplesPerBlock);
 
     if (auto* p = parameters.getRawParameterValue(zl::id::THRESHOLD.getParamID()))
+    {
         limiter.setThresholdDb(p->load());
+        multibandLimiter.setThresholdDb(p->load());
+    }
     if (auto* p = parameters.getRawParameterValue(zl::id::RELEASE_MS.getParamID()))
         limiter.setReleaseMs(p->load());
     if (auto* p = parameters.getRawParameterValue(zl::id::AUTO_RELEASE.getParamID()))
@@ -137,6 +150,7 @@ void ZeroLimitAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
 void ZeroLimitAudioProcessor::releaseResources()
 {
     limiter.reset();
+    multibandLimiter.reset();
     inputMomentary.reset();
     outputMomentary.reset();
     inputCopyBuffer.setSize(0, 0);
@@ -167,9 +181,25 @@ void ZeroLimitAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     const float outGainDb   = parameters.getRawParameterValue(zl::id::OUTPUT_GAIN.getParamID())->load();
     const float releaseMs   = parameters.getRawParameterValue(zl::id::RELEASE_MS.getParamID())->load();
     const bool  autoRel     = parameters.getRawParameterValue(zl::id::AUTO_RELEASE.getParamID())->load() > 0.5f;
+    const bool  multiMode   = parameters.getRawParameterValue(zl::id::MODE.getParamID())->load() > 0.5f;
+
+    // Single 側のリミッタは Multi モードではサム後の最終セーフティとして使う。
+    // Multi 時はバンド内リダクションで十分抑えているので、セーフティは位相合成オーバーシュートの
+    // 取りこぼしだけを拾えば良い。Auto Release 強制 ON、短めの時定数に設定する。
     limiter.setThresholdDb(thresholdDb);
-    limiter.setReleaseMs(releaseMs);
-    limiter.setAutoReleaseEnabled(autoRel);
+    if (multiMode)
+    {
+        limiter.setReleaseMs(5.0f);
+        limiter.setSlowReleaseMs(50.0f);
+        limiter.setAutoReleaseEnabled(true);
+        multibandLimiter.setThresholdDb(thresholdDb);
+    }
+    else
+    {
+        limiter.setReleaseMs(releaseMs);
+        limiter.setSlowReleaseMs(150.0f);
+        limiter.setAutoReleaseEnabled(autoRel);
+    }
 
     // --- 入力信号のコピー（破壊前に取る）---
     if (inputCopyBuffer.getNumChannels() != numChannels
@@ -207,7 +237,20 @@ void ZeroLimitAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     inputMomentary.processBlock(inputCopyBuffer);
 
     // --- リミッター ---
-    const float minGain = limiter.processBlock(buffer);
+    //  Single: limiter 1 段のみ
+    //  Multi : multibandLimiter（3 バンド）→ limiter（サム後の最終セーフティ）
+    float minGain = 1.0f;
+    if (multiMode)
+    {
+        const float mbGain     = multibandLimiter.processBlock(buffer);
+        const float safetyGain = limiter.processBlock(buffer);
+        // 区間内の最大リダクション相当（バンド内の最深 × 最終セーフティ段）
+        minGain = mbGain * safetyGain;
+    }
+    else
+    {
+        minGain = limiter.processBlock(buffer);
+    }
     atomicMinFloat(minGainAccum, minGain);
 
     // --- Auto makeup gain + 出力ゲイン ---

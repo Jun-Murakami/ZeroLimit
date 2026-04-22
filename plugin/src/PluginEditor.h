@@ -42,6 +42,7 @@ private:
     juce::WebToggleButtonRelay webAutoReleaseRelay;
     juce::WebToggleButtonRelay webLinkRelay;
     juce::WebComboBoxRelay     webMeteringModeRelay;
+    juce::WebComboBoxRelay     webModeRelay;   // Single / Multi band mode
 
     // APVTS ←→ Web バインディング
     juce::WebSliderParameterAttachment       thresholdAttachment;
@@ -50,6 +51,7 @@ private:
     juce::WebToggleButtonParameterAttachment autoReleaseAttachment;
     juce::WebToggleButtonParameterAttachment linkAttachment;
     juce::WebComboBoxParameterAttachment     meteringModeAttachment;
+    juce::WebComboBoxParameterAttachment     modeAttachment;
 
     juce::WebControlParameterIndexReceiver controlParameterIndexReceiver;
 

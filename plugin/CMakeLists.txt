@@ -72,6 +72,10 @@ target_sources(ZeroLimit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/dsp/Limiter.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/dsp/MomentaryProcessor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/dsp/MomentaryProcessor.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dsp/CrossoverLR4.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dsp/CrossoverLR4.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dsp/MultibandLimiter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dsp/MultibandLimiter.h
 )
 
 if(APPLE)

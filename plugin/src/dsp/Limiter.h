@@ -19,7 +19,11 @@ public:
     // スレッショルド（dBFS, -40..0）
     void setThresholdDb(float thresholdDb);
     // 手動リリース時定数（ms）。Auto Release OFF 時に使用。
+    //  Auto Release ON 時は fast envelope の時定数として流用される（= fast floor）。
     void setReleaseMs(float releaseMs);
+    // Slow envelope の時定数（ms）。Auto Release 計算に使われる。
+    //  Single-band の既定値は 150 ms だが、マルチバンドではバンドごとに上書きする。
+    void setSlowReleaseMs(float ms);
     // Auto Release モード。ON 時は fast/slow envelope の min を適用し、
     // 手動リリース時定数は無視される（内部は fast envelope として流用）。
     void setAutoReleaseEnabled(bool enabled) noexcept { autoReleaseEnabled = enabled; }
@@ -42,10 +46,10 @@ private:
     float currentGain  = 1.0f;
     float releaseMs = 1.0f;
 
-    // Slow envelope（Auto Release 用。~150 ms で固定）
+    // Slow envelope（Auto Release 用。既定 150 ms、setSlowReleaseMs で差し替え可）
     float slowReleaseCoeff = 0.9999f;
     float currentGainSlow  = 1.0f;
-    static constexpr float kAutoSlowReleaseMs = 150.0f;
+    float autoSlowReleaseMs = 150.0f;
 
     bool autoReleaseEnabled = true;
 

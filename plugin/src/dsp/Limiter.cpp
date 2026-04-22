@@ -31,11 +31,18 @@ void ZeroLatencyLimiter::setReleaseMs(float ms)
     updateReleaseCoeffs();
 }
 
+void ZeroLatencyLimiter::setSlowReleaseMs(float ms)
+{
+    // Slow envelope の時定数。マルチバンドで低域を遅めに・高域を速めにするのに使う。
+    autoSlowReleaseMs = std::max(1.0f, std::min(2000.0f, ms));
+    updateReleaseCoeffs();
+}
+
 void ZeroLatencyLimiter::updateReleaseCoeffs()
 {
     // coeff = exp(-1 / tau_samples)。tau_samples = (ms * 1e-3) * fs
     const double tauFast = (static_cast<double>(releaseMs)             * 0.001) * currentSampleRate;
-    const double tauSlow = (static_cast<double>(kAutoSlowReleaseMs)    * 0.001) * currentSampleRate;
+    const double tauSlow = (static_cast<double>(autoSlowReleaseMs)     * 0.001) * currentSampleRate;
     releaseCoeff     = tauFast > 0.0 ? static_cast<float>(std::exp(-1.0 / tauFast)) : 0.0f;
     slowReleaseCoeff = tauSlow > 0.0 ? static_cast<float>(std::exp(-1.0 / tauSlow)) : 0.0f;
 }
