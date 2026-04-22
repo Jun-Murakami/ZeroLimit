@@ -15,7 +15,7 @@ if ($NewVersion -notmatch "^\d+\.\d+\.\d+(-\w+)?$") {
     exit 1
 }
 
-$RootDir = "D:\Synching\code\JUCE\ZeroLimit3"
+$RootDir = "D:\Synching\code\JUCE\ZeroLimit"
 
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "   Updating ZeroLimit version to $NewVersion" -ForegroundColor Cyan

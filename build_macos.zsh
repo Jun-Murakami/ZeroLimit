@@ -559,7 +559,7 @@ PKG_WORK_DIR="${OUTPUT_DIR}/pkgwork"
 mkdir -p "${PKG_WORK_DIR}"
 
 # Base ID (can be overridden by environment variable)
-PKG_ID_BASE="${PKG_ID_BASE:-com.bucketrelay.zerolimit3}"
+PKG_ID_BASE="${PKG_ID_BASE:-com.bucketrelay.zerolimit}"
 
 # VST3
 echo_step "Creating VST3 component PKG..."

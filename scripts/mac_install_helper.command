@@ -20,7 +20,7 @@ VST3_FILE="$SCRIPT_DIR/ZeroLimit.vst3"
 
 # Check if VST3 exists
 if [ ! -d "$VST3_FILE" ]; then
-    echo "❌ ZeroLimit3.vst3 not found in the same directory as this script"
+    echo "❌ ZeroLimit.vst3 not found in the same directory as this script"
     echo "   Please ensure the VST3 file is in: $SCRIPT_DIR"
     read -p "Press any key to exit..."
     exit 1
