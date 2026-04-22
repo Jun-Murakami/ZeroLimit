@@ -213,7 +213,7 @@ function App() {
             <ParameterFader
               parameterId='OUTPUT_GAIN'
               label='OUTPUT'
-              min={-24}
+              min={-40}
               max={0}
               unit='dB'
               defaultValue={0}
@@ -221,12 +221,12 @@ function App() {
               wheelStepFine={0.1}
               scaleMarks={[
                 { value: 0, label: '0' },
-                { value: -3, label: '-3' },
                 { value: -6, label: '-6' },
-                { value: -9, label: '-9' },
                 { value: -12, label: '-12' },
                 { value: -18, label: '-18' },
                 { value: -24, label: '-24' },
+                { value: -30, label: '-30' },
+                { value: -40, label: '-40' },
               ]}
             />
           </Box>
