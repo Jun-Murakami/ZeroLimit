@@ -8,31 +8,50 @@
 
 namespace zl::dsp {
 
-// 3 バンド・マルチバンド・ブリックウォール・リミッター（ゼロレイテンシー）
+// 可変バンド（3 / 4 / 5）マルチバンド・ブリックウォール・リミッター（ゼロレイテンシー）
 //
-//   Input → CrossoverLR4 → Low / Mid / High
-//         → 各バンドに独立リミッタ（Auto Release 強制、バンド固有の時定数）
-//         → サム
+//   Input → CrossoverLR4（動的 3/4/5 バンド） → 各バンドに独立リミッタ → サム
 //
-// 最終セーフティリミッタはここには含めない（呼び出し側で既存 ZeroLatencyLimiter を
-//  サム後に適用する）。これによりバンド合成後の位相合成オーバーシュートもクランプされる。
+// 最終セーフティリミッタはここに含めない（呼び出し側で既存 ZeroLatencyLimiter を
+// サム後に適用する）。位相合成オーバーシュートはそこで吸収される。
 //
-// バンド固有の時定数設計（経験則：最小リリース ≥ 2-3 × バンド中心周波数の周期）:
-//   - Low    (fc ≈ 50 Hz ): slow 250 ms,  fast floor 20 ms
-//   - Mid    (fc ≈ 700 Hz): slow 150 ms,  fast floor 5  ms
-//   - High   (fc ≈ 10 kHz): slow 80  ms,  fast floor 1  ms
+// バンド数ごとの設計（固定値・ゼロコンフィグ）:
+//
+// [3-band] 放送寄り。声を Mid バンドに閉じ込める。
+//   crossovers: 120 Hz / 5 kHz
+//   Low  (<120 Hz)     : fast 20 ms,  slow 250 ms
+//   Mid  (120 Hz-5 kHz): fast 5  ms,  slow 150 ms   ← 声帯域
+//   High (>5 kHz)      : fast 1  ms,  slow 80  ms
+//
+// [4-band] Steinberg 準拠。声を Low-Mid に閉じ込め + Air 分離。
+//   crossovers: 150 Hz / 5 kHz / 15 kHz
+//   Low      (<150 Hz)     : fast 20  ms, slow 250 ms
+//   LowMid   (150 Hz-5 kHz): fast 5   ms, slow 150 ms   ← 声帯域
+//   HighMid  (5-15 kHz)    : fast 1   ms, slow 80  ms
+//   Air      (>15 kHz)     : fast 0.5 ms, slow 50  ms
+//
+// [5-band] UA 準拠。音楽マスタリング志向。声は Mid バンドを中心に扱われるが F1/F2 が分割される。
+//   crossovers: 80 / 250 / 1000 / 5000 Hz
+//   Sub      (<80)         : fast 30 ms,  slow 300 ms
+//   Bass     (80-250)      : fast 15 ms,  slow 200 ms
+//   LowMid   (250-1k)      : fast 5  ms,  slow 120 ms
+//   MidHigh  (1k-5k)       : fast 2  ms,  slow 100 ms
+//   High     (>5k)         : fast 1  ms,  slow 80  ms
 class MultibandLimiter
 {
 public:
-    static constexpr int kNumBands = 3;
-    static constexpr float kDefaultCrossoverLowHz  = 120.0f;
-    static constexpr float kDefaultCrossoverHighHz = 5000.0f;
+    static constexpr int kMaxBands = CrossoverLR4::kMaxBands; // 5
+
+    enum class Mode { Band3 = 0, Band4 = 1, Band5 = 2 };
 
     void prepare(double sampleRate, int numChannels, int maxBlockSize);
     void reset();
 
     void setThresholdDb(float thresholdDb);
-    void setCrossoverFrequencies(float lowHz, float highHz);
+    // 3 / 4 / 5 バンドの切替。band count とそれぞれの既定 crossover、時定数がセットで適用される。
+    void setMode(Mode mode);
+    Mode getMode() const noexcept { return currentMode; }
+    int  getNumBands() const noexcept;
 
     // in-place 処理。戻り値は区間中に観測された最小ゲイン（= 最大リダクション, 0..1）。
     // バンド間の最小値（= 最もリダクションが深かったバンドの値）を返す。
@@ -40,17 +59,15 @@ public:
 
 private:
     CrossoverLR4 crossover;
-    std::array<ZeroLatencyLimiter, kNumBands> bandLimiters;
+    std::array<ZeroLatencyLimiter, kMaxBands> bandLimiters;
+    std::array<juce::AudioBuffer<float>, kMaxBands> bandBufs;
 
-    juce::AudioBuffer<float> lowBuf;
-    juce::AudioBuffer<float> midBuf;
-    juce::AudioBuffer<float> highBuf;
-
-    int   preparedChannels = 2;
-    int   preparedBlock    = 0;
+    int   preparedChannels  = 2;
+    int   preparedBlock     = 0;
     float currentThresholdDb = 0.0f;
+    Mode  currentMode        = Mode::Band3;
 
-    void configureBandReleases();
+    void configureForMode(Mode mode);
 };
 
 } // namespace zl::dsp

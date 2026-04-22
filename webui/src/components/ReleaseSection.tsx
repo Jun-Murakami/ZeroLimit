@@ -37,6 +37,8 @@ export const ReleaseSection: React.FC = () => {
   // Single / Multi バンドモード。Multi 時はこのセクション全体が効かなくなる（強制 Auto Release）。
   const { index: modeIndex, setIndex: setModeIndex } = useJuceComboBoxIndex('MODE');
   const multiMode = modeIndex === 1;
+  // Multi モードのバンド数（0=3, 1=4, 2=5）
+  const { index: bandCountIdx, setIndex: setBandCountIdx } = useJuceComboBoxIndex('BAND_COUNT');
 
   const [isEditing, setIsEditing] = useState(false);
   const [inputText, setInputText] = useState<string>('');
@@ -137,6 +139,76 @@ export const ReleaseSection: React.FC = () => {
         p: 1,
       }}
     >
+      {/* === 上段: Single / Multi バンドモード切替 + Multi 時のバンド数セレクタ ===
+          Multi が既定かつメインの動作モードなので、セクションの先頭に配置する。
+          各バンド数の crossover とバンド別時定数は DSP 側で固定（ゼロコンフィグ）:
+            3-band: 120 Hz / 5 kHz                 （放送、声を Mid に閉じ込め）← 既定
+            4-band: 150 Hz / 5 kHz / 15 kHz        （Steinberg 準拠）
+            5-band: 80 / 250 / 1k / 5k Hz          （UA 準拠、音楽マスタリング志向） */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={multiMode}
+              onChange={(e) => setModeIndex(e.target.checked ? 1 : 0)}
+              size='small'
+            />
+          }
+          label={multiMode ? 'Multi-band' : 'Single-band'}
+          sx={{
+            m: 0,
+            color: multiMode ? 'primary.main' : 'text.primary',
+            '& .MuiFormControlLabel-label': { fontSize: '0.875rem', fontWeight: multiMode ? 600 : 400 },
+          }}
+        />
+        {multiMode && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            {/* 「Bands」ラベル。数字だけだと何の値か不明瞭なので明示する。 */}
+            <Typography variant='caption' sx={{ fontSize: '0.75rem', color: 'text.secondary', mr: 0.5 }}>
+              Bands
+            </Typography>
+            {/* バンド数切替（3 / 4 / 5） */}
+            <Box sx={{ display: 'flex', border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
+              {[
+                { label: '3', idx: 0 },
+                { label: '4', idx: 1 },
+                { label: '5', idx: 2 },
+              ].map((opt) => {
+                const active = bandCountIdx === opt.idx;
+                return (
+                  <Box
+                    key={opt.idx}
+                    onClick={() => setBandCountIdx(opt.idx)}
+                    sx={{
+                      px: 1,
+                      py: 0.15,
+                      fontSize: '0.72rem',
+                      fontWeight: active ? 600 : 400,
+                      cursor: 'pointer',
+                      backgroundColor: active ? 'primary.main' : 'transparent',
+                      color: active ? 'background.paper' : 'text.secondary',
+                      minWidth: 22,
+                      textAlign: 'center',
+                      userSelect: 'none',
+                      transition: 'background-color 80ms',
+                      '&:hover': { backgroundColor: active ? 'primary.dark' : 'grey.700' },
+                    }}
+                  >
+                    {opt.label}
+                  </Box>
+                );
+              })}
+            </Box>
+          </Box>
+        )}
+      </Box>
+
+      {/* 分割線。Mode セクションと Release セクションを視覚的に区切る */}
+      <Box sx={{ mt: 0.5, mb: 1, borderTop: '1px solid', borderColor: 'divider' }} />
+
+      {/* === 下段: Release（Auto/Manual + 時定数）===
+          Single-band 時のみ機能。Multi 時はバンド別に最適化された Auto Release が
+          DSP 側で強制されるため、ここは半透明 + 操作不可で無効化する。 */}
       <Box
         sx={{
           display: 'flex',
@@ -233,35 +305,6 @@ export const ReleaseSection: React.FC = () => {
             { value: 1.0, label: '1000' },
           ]}
         />
-      </Box>
-
-      {/* 分割線。Release セクションと Mode セクションを視覚的に区切る */}
-      <Box sx={{ mt: 1, mb: 0.5, borderTop: '1px solid', borderColor: 'divider' }} />
-
-      {/* Single / Multi バンドモード切替。
-          Multi はゼロレイテンシー 3 バンド LR4 クロスオーバー（120 Hz / 5 kHz）で、
-          各バンドが独立リミッタ（Auto Release 強制、バンド固有の時定数）を持つ。 */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={multiMode}
-              onChange={(e) => setModeIndex(e.target.checked ? 1 : 0)}
-              size='small'
-            />
-          }
-          label={multiMode ? 'Multi-band' : 'Single-band'}
-          sx={{
-            m: 0,
-            color: multiMode ? 'primary.main' : 'text.primary',
-            '& .MuiFormControlLabel-label': { fontSize: '0.875rem', fontWeight: multiMode ? 600 : 400 },
-          }}
-        />
-        {multiMode && (
-          <Typography variant='caption' sx={{ fontSize: '0.7rem', color: 'text.secondary', fontStyle: 'italic' }}>
-            LR4 @ 120 Hz / 5 kHz
-          </Typography>
-        )}
       </Box>
     </Box>
   );

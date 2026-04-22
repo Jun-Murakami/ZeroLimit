@@ -4,18 +4,52 @@
 namespace zl::dsp {
 
 namespace {
-    // バンド固有のリリース時定数設計
-    //   fast は Auto Release の fast envelope（floor）として働く。
-    //   slow は dual-envelope の遅い側。min(fast, slow) で抑制量が決まる。
-    struct BandReleaseSpec { float fastMs; float slowMs; };
-    constexpr BandReleaseSpec kBandRelease[MultibandLimiter::kNumBands] = {
-        // Low  (fc ~50 Hz)
-        { 20.0f, 250.0f },
-        // Mid  (fc ~700 Hz)
-        {  5.0f, 150.0f },
-        // High (fc ~10 kHz)
-        {  1.0f,  80.0f },
+    struct BandSpec { float fastMs; float slowMs; };
+
+    // --- 3-band (120 Hz / 5 kHz) ---
+    constexpr float kCrossovers3[2] = { 120.0f, 5000.0f };
+    constexpr BandSpec kBands3[3] = {
+        { 20.0f, 250.0f },  // Low   (<120)
+        {  5.0f, 150.0f },  // Mid   (120-5k)   ← 声帯域
+        {  1.0f,  80.0f },  // High  (>5k)
     };
+
+    // --- 4-band (Steinberg: 150 / 5k / 15k) ---
+    constexpr float kCrossovers4[3] = { 150.0f, 5000.0f, 15000.0f };
+    constexpr BandSpec kBands4[4] = {
+        { 20.0f, 250.0f },  // Low      (<150)
+        {  5.0f, 150.0f },  // LowMid   (150-5k)   ← 声帯域
+        {  1.0f,  80.0f },  // HighMid  (5-15k)
+        {  0.5f,  50.0f },  // Air      (>15k)
+    };
+
+    // --- 5-band (UA all-round: 80 / 250 / 1k / 5k) ---
+    constexpr float kCrossovers5[4] = { 80.0f, 250.0f, 1000.0f, 5000.0f };
+    constexpr BandSpec kBands5[5] = {
+        { 30.0f, 300.0f },  // Sub      (<80)
+        { 15.0f, 200.0f },  // Bass     (80-250)
+        {  5.0f, 120.0f },  // LowMid   (250-1k)
+        {  2.0f, 100.0f },  // MidHigh  (1k-5k)
+        {  1.0f,  80.0f },  // High     (>5k)
+    };
+
+    void applyBandSpec(ZeroLatencyLimiter& lim, const BandSpec& spec)
+    {
+        lim.setReleaseMs    (spec.fastMs);
+        lim.setSlowReleaseMs(spec.slowMs);
+        lim.setAutoReleaseEnabled(true);
+    }
+}
+
+int MultibandLimiter::getNumBands() const noexcept
+{
+    switch (currentMode)
+    {
+        case Mode::Band3: return 3;
+        case Mode::Band4: return 4;
+        case Mode::Band5: return 5;
+    }
+    return 3;
 }
 
 void MultibandLimiter::prepare(double sampleRate, int numChannelsIn, int maxBlockSize)
@@ -24,18 +58,15 @@ void MultibandLimiter::prepare(double sampleRate, int numChannelsIn, int maxBloc
     preparedBlock    = std::max(1, maxBlockSize);
 
     crossover.prepare(sampleRate, preparedChannels);
-    crossover.setCrossoverFrequencies(kDefaultCrossoverLowHz, kDefaultCrossoverHighHz);
 
     for (auto& limiter : bandLimiters)
         limiter.prepare(sampleRate, preparedChannels);
 
-    // バンド固有のリリース設定と Auto Release 強制 ON
-    configureBandReleases();
+    for (auto& b : bandBufs)
+        b.setSize(preparedChannels, preparedBlock, false, false, true);
 
-    // 作業バッファを前もって最大ブロックサイズで確保
-    lowBuf .setSize(preparedChannels, preparedBlock, false, false, true);
-    midBuf .setSize(preparedChannels, preparedBlock, false, false, true);
-    highBuf.setSize(preparedChannels, preparedBlock, false, false, true);
+    // 初期モード反映（既定は Band3）
+    configureForMode(currentMode);
 }
 
 void MultibandLimiter::reset()
@@ -52,18 +83,33 @@ void MultibandLimiter::setThresholdDb(float thresholdDb)
         limiter.setThresholdDb(thresholdDb);
 }
 
-void MultibandLimiter::setCrossoverFrequencies(float lowHz, float highHz)
+void MultibandLimiter::setMode(Mode mode)
 {
-    crossover.setCrossoverFrequencies(lowHz, highHz);
+    if (mode == currentMode) return;
+    currentMode = mode;
+    configureForMode(mode);
+    // バンド再構成で切替前の内部状態はリセットしておく（ちらつき回避）
+    crossover.reset();
+    for (auto& limiter : bandLimiters)
+        limiter.reset();
 }
 
-void MultibandLimiter::configureBandReleases()
+void MultibandLimiter::configureForMode(Mode mode)
 {
-    for (int b = 0; b < kNumBands; ++b)
+    switch (mode)
     {
-        bandLimiters[b].setReleaseMs    (kBandRelease[b].fastMs);
-        bandLimiters[b].setSlowReleaseMs(kBandRelease[b].slowMs);
-        bandLimiters[b].setAutoReleaseEnabled(true);
+        case Mode::Band3:
+            crossover.configure(3, kCrossovers3);
+            for (int i = 0; i < 3; ++i) applyBandSpec(bandLimiters[i], kBands3[i]);
+            break;
+        case Mode::Band4:
+            crossover.configure(4, kCrossovers4);
+            for (int i = 0; i < 4; ++i) applyBandSpec(bandLimiters[i], kBands4[i]);
+            break;
+        case Mode::Band5:
+            crossover.configure(5, kCrossovers5);
+            for (int i = 0; i < 5; ++i) applyBandSpec(bandLimiters[i], kBands5[i]);
+            break;
     }
 }
 
@@ -74,26 +120,37 @@ float MultibandLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcept
     if (channels <= 0 || n <= 0)
         return 1.0f;
 
-    // 3 バンド分解（入力は壊さない）
-    crossover.processBlock(buffer, lowBuf, midBuf, highBuf);
+    const int N = getNumBands();
 
-    // バンドごとに独立リミット
-    const float gLow  = bandLimiters[0].processBlock(lowBuf);
-    const float gMid  = bandLimiters[1].processBlock(midBuf);
-    const float gHigh = bandLimiters[2].processBlock(highBuf);
+    // バンド分解
+    crossover.processBlock(buffer, bandBufs);
+
+    // バンドごとに独立リミット、最小ゲインを集計
+    float minGain = 1.0f;
+    for (int i = 0; i < N; ++i)
+    {
+        const float g = bandLimiters[i].processBlock(bandBufs[i]);
+        if (g < minGain) minGain = g;
+    }
 
     // サム（in-place で buffer に書き戻す）
     for (int ch = 0; ch < channels; ++ch)
     {
-        auto*       out = buffer.getWritePointer(ch);
-        const auto* l   = lowBuf .getReadPointer(ch);
-        const auto* m   = midBuf .getReadPointer(ch);
-        const auto* h   = highBuf.getReadPointer(ch);
+        auto* out = buffer.getWritePointer(ch);
+        // 最初のバンドで初期化
+        const auto* src0 = bandBufs[0].getReadPointer(ch);
         for (int i = 0; i < n; ++i)
-            out[i] = l[i] + m[i] + h[i];
+            out[i] = src0[i];
+        // 残りを加算
+        for (int b = 1; b < N; ++b)
+        {
+            const auto* src = bandBufs[b].getReadPointer(ch);
+            for (int i = 0; i < n; ++i)
+                out[i] += src[i];
+        }
     }
 
-    return std::min({ gLow, gMid, gHigh });
+    return minGain;
 }
 
 } // namespace zl::dsp

@@ -16,6 +16,9 @@ import { ReleaseSection } from './components/ReleaseSection';
 import { useHostShortcutForwarding } from './hooks/useHostShortcutForwarding';
 import { GlobalDialog } from './components/GlobalDialog';
 import LicenseDialog from './components/LicenseDialog';
+import { WebTransportBar } from './components/WebTransportBar';
+
+const IS_WEB_MODE = import.meta.env.VITE_RUNTIME === 'web';
 import type { MeterUpdateData } from './types';
 import './App.css';
 
@@ -356,7 +359,58 @@ function App() {
           caret-color: auto;
         }
       `}</style>
-      <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', p: 2, pt: 0, overflow: 'hidden' }}>
+      <Box
+        sx={IS_WEB_MODE
+          ? {
+              // Web デモ：ブラウザ中央にプラグインカードを配置する。
+              minHeight: '100vh',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              py: 4,
+              px: 2,
+              gap: 1.5,
+            }
+          : {
+              // プラグイン：DAW ウィンドウ全体を占有する。
+              height: '100vh',
+              display: 'flex',
+              flexDirection: 'column',
+              p: 2,
+              pt: 0,
+              overflow: 'hidden',
+            }
+        }
+      >
+        {/* Web モード時のみ、トランスポート（再生 / シーク / Bypass / ファイル選択）を
+            プラグインカードの外に配置する。プラグイン本体の機能ではない操作系なので。 */}
+        {IS_WEB_MODE && (
+          <Box sx={{ width: '100%', maxWidth: 500 }}>
+            <WebTransportBar />
+          </Box>
+        )}
+
+        {/* Web モード時はプラグイン UI をカード化して幅固定・影つきに。
+            プラグインモードでは透過（display: 'contents'）して従来のフレックス挙動を維持。 */}
+        <Box
+          sx={IS_WEB_MODE
+            ? {
+                width: '100%',
+                maxWidth: 500,
+                height: 500,
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+                p: 2,
+                pt: 0,
+                borderRadius: 2,
+                boxShadow: 8,
+                backgroundColor: 'background.default',
+              }
+            : { display: 'contents' }
+          }
+        >
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 1, py: 0.5 }}>
           <Typography
             variant='body2'
@@ -700,8 +754,8 @@ function App() {
           <ReleaseSection />
         </Paper>
 
-        {/* リサイズハンドル（視覚は #resizeHandle::after で描画） */}
-        <div
+        {/* リサイズハンドル（視覚は #resizeHandle::after で描画）。Web モードでは不要 */}
+        {!IS_WEB_MODE && <div
           id='resizeHandle'
           onPointerDown={onDragStart}
           onPointerMove={onDrag}
@@ -717,7 +771,21 @@ function App() {
             backgroundColor: 'transparent',
           }}
           title='Resize'
-        />
+        />}
+        </Box>
+
+        {/* Web モード：プラグインカード直下に簡単な説明を添える */}
+        {IS_WEB_MODE && (
+          <Typography
+            variant='caption'
+            color='text.secondary'
+            sx={{ mt: 1, textAlign: 'center', maxWidth: 500, lineHeight: 1.8, px: 2 }}
+          >
+            A zero-latency brickwall limiter with multiband processing. DSP compiled to WebAssembly — running fully in your browser.
+            <br />
+            ゼロレイテンシー・ブロードキャスト／マスタリング用のリミッターを WebAssembly で動かしているデモ版です。
+          </Typography>
+        )}
       </Box>
 
       <LicenseDialog open={licenseOpen} onClose={closeLicenseDialog} />

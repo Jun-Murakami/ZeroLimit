@@ -99,12 +99,24 @@ juce::AudioProcessorValueTreeState::ParameterLayout ZeroLimitAudioProcessor::cre
         false));
 
     // MODE: Single / Multi バンドモード切替。
-    //  Multi は 3 バンド LR4 クロスオーバー（120 Hz / 5 kHz）+ バンド毎独立リミッタ。
+    //  Multi はバンド数に応じた LR4 IIR ツリー分割 + バンド毎独立リミッタ。
     //  Multi 時は自動的に Auto Release として振る舞い、手動 RELEASE_MS は無視される。
+    //  既定は Multi（ゼロコンフィグで"良い音"が出る方向をデフォルトにする）。
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         zl::id::MODE,
         "Mode",
         juce::StringArray{ "Single", "Multi" },
+        1));
+
+    // BAND_COUNT: Multi モードのバンド数。
+    //  3-band: 120 Hz / 5 kHz             （放送、声を Mid に閉じ込め）← 既定
+    //  4-band: 150 Hz / 5 kHz / 15 kHz    （Steinberg 準拠）
+    //  5-band: 80 / 250 / 1k / 5k Hz      （UA 準拠、音楽マスタリング志向）
+    //  既定 3-band：声の一貫性を最優先、最もクセが少なく幅広いソースで破綻しない。
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        zl::id::BAND_COUNT,
+        "Band Count",
+        juce::StringArray{ "3 Band", "4 Band", "5 Band" },
         0));
 
     return { params.begin(), params.end() };
@@ -182,6 +194,7 @@ void ZeroLimitAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     const float releaseMs   = parameters.getRawParameterValue(zl::id::RELEASE_MS.getParamID())->load();
     const bool  autoRel     = parameters.getRawParameterValue(zl::id::AUTO_RELEASE.getParamID())->load() > 0.5f;
     const bool  multiMode   = parameters.getRawParameterValue(zl::id::MODE.getParamID())->load() > 0.5f;
+    const int   bandCountIdx = static_cast<int>(parameters.getRawParameterValue(zl::id::BAND_COUNT.getParamID())->load() + 0.5f);
 
     // Single 側のリミッタは Multi モードではサム後の最終セーフティとして使う。
     // Multi 時はバンド内リダクションで十分抑えているので、セーフティは位相合成オーバーシュートの
@@ -192,6 +205,12 @@ void ZeroLimitAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
         limiter.setReleaseMs(5.0f);
         limiter.setSlowReleaseMs(50.0f);
         limiter.setAutoReleaseEnabled(true);
+
+        // バンド数切替。setMode は内部で同じモード指定なら何もしない。
+        const auto desiredMode = (bandCountIdx == 0) ? zl::dsp::MultibandLimiter::Mode::Band3
+                               : (bandCountIdx == 2) ? zl::dsp::MultibandLimiter::Mode::Band5
+                                                     : zl::dsp::MultibandLimiter::Mode::Band4;
+        multibandLimiter.setMode(desiredMode);
         multibandLimiter.setThresholdDb(thresholdDb);
     }
     else

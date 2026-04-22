@@ -182,6 +182,7 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
       webLinkRelay         { zl::id::LINK.getParamID() },
       webMeteringModeRelay { zl::id::METERING_MODE.getParamID() },
       webModeRelay         { zl::id::MODE.getParamID() },
+      webBandCountRelay    { zl::id::BAND_COUNT.getParamID() },
       thresholdAttachment    { *p.getState().getParameter(zl::id::THRESHOLD.getParamID()),     webThresholdRelay,    nullptr },
       outputGainAttachment   { *p.getState().getParameter(zl::id::OUTPUT_GAIN.getParamID()),   webOutputGainRelay,   nullptr },
       releaseMsAttachment    { *p.getState().getParameter(zl::id::RELEASE_MS.getParamID()),    webReleaseMsRelay,    nullptr },
@@ -189,6 +190,7 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
       linkAttachment         { *p.getState().getParameter(zl::id::LINK.getParamID()),          webLinkRelay,         nullptr },
       meteringModeAttachment { *p.getState().getParameter(zl::id::METERING_MODE.getParamID()), webMeteringModeRelay, nullptr },
       modeAttachment         { *p.getState().getParameter(zl::id::MODE.getParamID()),          webModeRelay,         nullptr },
+      bandCountAttachment    { *p.getState().getParameter(zl::id::BAND_COUNT.getParamID()),    webBandCountRelay,    nullptr },
       webView{
           // ProTools Windows 等、DPI 非対応ホストで WebView2 の自動スケーリングを抑止する
           makeWebViewOptionsWithPreLaunchArgs(p)
@@ -211,6 +213,7 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
               .withOptionsFrom(webLinkRelay)
               .withOptionsFrom(webMeteringModeRelay)
               .withOptionsFrom(webModeRelay)
+              .withOptionsFrom(webBandCountRelay)
               .withNativeFunction(
                   juce::Identifier{"system_action"},
                   [this](const juce::Array<juce::var>& args,

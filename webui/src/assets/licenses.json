@@ -871,7 +871,7 @@
     "path": "D:\\Synching\\code\\JUCE\\ZeroLimit\\webui\\node_modules\\cosmiconfig\\node_modules\\yaml",
     "licenseFile": "D:\\Synching\\code\\JUCE\\ZeroLimit\\webui\\node_modules\\cosmiconfig\\node_modules\\yaml\\LICENSE"
   },
-  "zerolimit-webui@0.1.0": {
+  "zerolimit-webui@1.0.0": {
     "licenses": "UNLICENSED",
     "private": true,
     "path": "D:\\Synching\\code\\JUCE\\ZeroLimit\\webui"

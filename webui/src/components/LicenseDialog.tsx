@@ -144,8 +144,11 @@ export const LicenseDialog: React.FC<LicenseDialogProps> = ({ open, onClose }) =
           Frontend Dependencies
         </Typography>
 
-        {/* テーブル領域：余白を全て占有し、ここだけスクロール */}
-        <TableContainer component={Paper} variant='outlined' sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+        {/* テーブル領域：余白を全て占有し、ここだけスクロール。
+            プラグインウィンドウが小さい時に flex で 0 まで潰れて見切れないよう、最低 100px を確保する。
+            この最低値を下回るような小さい画面ではダイアログ全体（DialogContent）がスクロールして
+            テーブル見出しまで辿り着けるようにする。 */}
+        <TableContainer component={Paper} variant='outlined' sx={{ flex: 1, minHeight: 100, overflow: 'auto' }}>
           <Table
             size='small'
             stickyHeader

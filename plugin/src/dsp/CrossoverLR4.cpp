@@ -10,155 +10,167 @@ void CrossoverLR4::prepare(double sr, int channelsIn)
 
     juce::dsp::ProcessSpec spec{};
     spec.sampleRate       = sampleRate;
-    spec.maximumBlockSize = 1;       // IIR::Filter は reset のみ。サンプル処理で使う。
+    spec.maximumBlockSize = 1;
     spec.numChannels      = 1;
 
-    auto prepAll = [&](auto& stagesArr)
-    {
-        for (int ch = 0; ch < kMaxChannels; ++ch)
-            for (auto& stage : stagesArr[ch])
-                stage.prepare(spec);
-    };
-    prepAll(lpLowStages);
-    prepAll(hpLowStages);
-    prepAll(lpHighStages);
-    prepAll(hpHighStages);
-    prepAll(lpHighOnLow);
-    prepAll(hpHighOnLow);
+    for (auto& p : splitPairs) p.prepare(spec);
+    for (auto& row : apPairs)
+        for (auto& p : row) p.prepare(spec);
 
     updateCoefficients();
-    assignCoefficientsToStages();
+    assignCoefficientsToAllPairs();
     reset();
 }
 
 void CrossoverLR4::reset()
 {
-    auto resetAll = [](auto& stagesArr)
-    {
-        for (int ch = 0; ch < kMaxChannels; ++ch)
-            for (auto& stage : stagesArr[ch])
-                stage.reset();
-    };
-    resetAll(lpLowStages);
-    resetAll(hpLowStages);
-    resetAll(lpHighStages);
-    resetAll(hpHighStages);
-    resetAll(lpHighOnLow);
-    resetAll(hpHighOnLow);
+    for (auto& p : splitPairs) p.reset();
+    for (auto& row : apPairs)
+        for (auto& p : row) p.reset();
 }
 
-void CrossoverLR4::setCrossoverFrequencies(float lowHz, float highHz)
+void CrossoverLR4::configure(int numBands, const float* crossovers)
 {
-    // fLow < fHigh を保証し、サンプルレートのナイキストより十分下に収める。
+    const int n = std::clamp(numBands, 3, kMaxBands);
+    currentBandCount = n;
+
     const float nyq   = static_cast<float>(sampleRate) * 0.5f;
-    const float safeU = nyq * 0.9f;
-    fLow  = std::clamp(lowHz,  20.0f, safeU);
-    fHigh = std::clamp(highHz, fLow + 10.0f, safeU);
+    const float safeU = nyq * 0.95f;
+
+    // 昇順に clamp しながら格納（最低 10 Hz の間隔を確保）
+    float prev = 10.0f;
+    for (int i = 0; i < n - 1; ++i)
+    {
+        float v = std::clamp(crossovers[i], prev, safeU);
+        crossoverFreqs[i] = v;
+        prev = v + 10.0f;
+    }
+    // 未使用スロットはクリア（安全のため、最後の値を踏襲）
+    for (int i = n - 1; i < kMaxCrossovers; ++i)
+        crossoverFreqs[i] = crossoverFreqs[std::max(0, n - 2)];
+
     updateCoefficients();
-    assignCoefficientsToStages();
+    assignCoefficientsToAllPairs();
 }
 
 void CrossoverLR4::updateCoefficients()
 {
-    // LR4 の各段は BW2（Q = 1/√2）。これを 2 段カスケードすると 4 次の LR となる。
-    lpLowCoefs  = Coefs::makeLowPass (sampleRate, fLow,  kButterQ);
-    hpLowCoefs  = Coefs::makeHighPass(sampleRate, fLow,  kButterQ);
-    lpHighCoefs = Coefs::makeLowPass (sampleRate, fHigh, kButterQ);
-    hpHighCoefs = Coefs::makeHighPass(sampleRate, fHigh, kButterQ);
+    for (int i = 0; i < kMaxCrossovers; ++i)
+    {
+        const float f = std::max(10.0f, crossoverFreqs[i]);
+        lpCoefs[i] = Coefs::makeLowPass (sampleRate, f, kButterQ);
+        hpCoefs[i] = Coefs::makeHighPass(sampleRate, f, kButterQ);
+    }
 }
 
-void CrossoverLR4::assignCoefficientsToStages()
+void CrossoverLR4::assignCoefficientsToAllPairs()
 {
-    auto assignAll = [](auto& stagesArr, Coefs::Ptr coefs)
-    {
-        for (int ch = 0; ch < kMaxChannels; ++ch)
-            for (auto& stage : stagesArr[ch])
-                stage.coefficients = coefs;
-    };
-    assignAll(lpLowStages,  lpLowCoefs);
-    assignAll(hpLowStages,  hpLowCoefs);
-    assignAll(lpHighStages, lpHighCoefs);
-    assignAll(hpHighStages, hpHighCoefs);
-    assignAll(lpHighOnLow,  lpHighCoefs);
-    assignAll(hpHighOnLow,  hpHighCoefs);
-}
+    // splitPairs[k] は c_k で分割
+    for (int k = 0; k < kMaxCrossovers; ++k)
+        splitPairs[k].setCoefficients(lpCoefs[k], hpCoefs[k]);
 
-void CrossoverLR4::processStageInPlace(std::array<std::array<Filter, 2>, kMaxChannels>& stages,
-                                       juce::AudioBuffer<float>& buf) noexcept
-{
-    const int channels = std::min(numChannels, buf.getNumChannels());
-    const int n        = buf.getNumSamples();
-    for (int ch = 0; ch < channels; ++ch)
+    // apPairs[b][j] は c_{b+1+j} で AP
+    for (int b = 0; b < kMaxBands - 2; ++b)
     {
-        auto* data = buf.getWritePointer(ch);
-        auto& s0   = stages[ch][0];
-        auto& s1   = stages[ch][1];
-        for (int i = 0; i < n; ++i)
-            data[i] = s1.processSample(s0.processSample(data[i]));
+        for (int j = 0; j < kMaxCrossovers - 1; ++j)
+        {
+            const int cIdx = b + 1 + j;
+            if (cIdx < kMaxCrossovers)
+                apPairs[b][j].setCoefficients(lpCoefs[cIdx], hpCoefs[cIdx]);
+            else
+                // 未使用スロット（その band では到達しない）。何か割り当てておく。
+                apPairs[b][j].setCoefficients(lpCoefs[kMaxCrossovers - 1], hpCoefs[kMaxCrossovers - 1]);
+        }
     }
 }
 
 void CrossoverLR4::processBlock(const juce::AudioBuffer<float>& input,
-                                juce::AudioBuffer<float>& lowOut,
-                                juce::AudioBuffer<float>& midOut,
-                                juce::AudioBuffer<float>& highOut) noexcept
+                                std::array<juce::AudioBuffer<float>, kMaxBands>& bandOuts) noexcept
 {
     const int channels = std::min(numChannels, input.getNumChannels());
     const int n        = input.getNumSamples();
     if (channels <= 0 || n <= 0)
         return;
 
-    // 作業バッファを確保（既存割当を再利用）
+    const int N = currentBandCount;
+    const int numCrossovers = N - 1;
+
     auto ensure = [&](juce::AudioBuffer<float>& b)
     {
         if (b.getNumChannels() != channels || b.getNumSamples() < n)
             b.setSize(channels, n, false, false, true);
     };
-    ensure(midHighBuffer);
-    ensure(lowRawBuffer);
-    ensure(lowAPLowBuffer);
-    ensure(lowAPHighBuffer);
-    if (lowOut.getNumChannels()  != channels || lowOut.getNumSamples()  < n) lowOut.setSize (channels, n, false, false, true);
-    if (midOut.getNumChannels()  != channels || midOut.getNumSamples()  < n) midOut.setSize (channels, n, false, false, true);
-    if (highOut.getNumChannels() != channels || highOut.getNumSamples() < n) highOut.setSize(channels, n, false, false, true);
+    ensure(restBuf);
+    ensure(bandRawBuf);
+    ensure(tmpA);
+    ensure(tmpB);
+    for (int i = 0; i < N; ++i)
+        ensure(bandOuts[i]);
 
-    // 1) Input を lowRaw / midHigh にコピーしてからそれぞれ LR4 を適用
+    // restBuf ← Input
     for (int ch = 0; ch < channels; ++ch)
-    {
-        lowRawBuffer .copyFrom(ch, 0, input, ch, 0, n);
-        midHighBuffer.copyFrom(ch, 0, input, ch, 0, n);
-    }
-    processStageInPlace(lpLowStages, lowRawBuffer);   // Low_raw = LP_LR4@fLow(Input)
-    processStageInPlace(hpLowStages, midHighBuffer);  // MidHigh = HP_LR4@fLow(Input)
+        restBuf.copyFrom(ch, 0, input, ch, 0, n);
 
-    // 2) MidHigh を Mid / High に分ける
-    for (int ch = 0; ch < channels; ++ch)
+    // 分割を N-1 段繰り返す。
+    //   stage k:
+    //     bandRawBuf = LP_LR4@c_k(restBuf)   ← これが B_k の「生」データ
+    //     restBuf    = HP_LR4@c_k(restBuf)   ← 残りの信号。次の段へ。
+    //
+    //   各 B_k に対して AP 連鎖（AP@c_{k+1}, ..., AP@c_{N-2}）を適用して
+    //   位相アライン済みの band を bandOuts[k] に書き出す。
+    for (int k = 0; k < numCrossovers; ++k)
     {
-        midOut .copyFrom(ch, 0, midHighBuffer, ch, 0, n);
-        highOut.copyFrom(ch, 0, midHighBuffer, ch, 0, n);
-    }
-    processStageInPlace(lpHighStages, midOut);   // Mid  = LP_LR4@fHigh(MidHigh)
-    processStageInPlace(hpHighStages, highOut);  // High = HP_LR4@fHigh(MidHigh)
+        // bandRawBuf ← restBuf (コピー)
+        for (int ch = 0; ch < channels; ++ch)
+            bandRawBuf.copyFrom(ch, 0, restBuf, ch, 0, n);
 
-    // 3) Low_raw に allpass@fHigh を適用して位相アライメント
-    //    AP_LR4@fHigh(x) = LP_LR4@fHigh(x) + HP_LR4@fHigh(x)
-    for (int ch = 0; ch < channels; ++ch)
-    {
-        lowAPLowBuffer .copyFrom(ch, 0, lowRawBuffer, ch, 0, n);
-        lowAPHighBuffer.copyFrom(ch, 0, lowRawBuffer, ch, 0, n);
-    }
-    processStageInPlace(lpHighOnLow, lowAPLowBuffer);
-    processStageInPlace(hpHighOnLow, lowAPHighBuffer);
+        // bandRawBuf に LP を適用（これが B_k の生データ）
+        splitPairs[k].applyLP(bandRawBuf, channels, n);
 
-    // Low = LP成分 + HP成分
-    for (int ch = 0; ch < channels; ++ch)
-    {
-        auto*       out = lowOut.getWritePointer(ch);
-        const auto* lp  = lowAPLowBuffer .getReadPointer(ch);
-        const auto* hp  = lowAPHighBuffer.getReadPointer(ch);
-        for (int i = 0; i < n; ++i)
-            out[i] = lp[i] + hp[i];
+        // restBuf に HP を適用（これが rest_k。次段の入力）
+        splitPairs[k].applyHP(restBuf, channels, n);
+
+        // B_k の AP 連鎖適用。Need AP at c_{k+1}, c_{k+2}, ..., c_{numCrossovers-1}
+        // apPairs[k][j] は c_{k+1+j} を表すので、j = 0..(numCrossovers-1 - (k+1)) = numCrossovers-2-k
+        const int numApStages = numCrossovers - 1 - k;
+        if (numApStages <= 0)
+        {
+            // AP 不要（N-2, N-1 バンドのうちの前者）: そのままコピー
+            for (int ch = 0; ch < channels; ++ch)
+                bandOuts[k].copyFrom(ch, 0, bandRawBuf, ch, 0, n);
+        }
+        else
+        {
+            // AP チェーンを順に適用。結果は bandRawBuf に書き戻しながら進める。
+            for (int j = 0; j < numApStages; ++j)
+            {
+                // tmpA = LP(bandRawBuf), tmpB = HP(bandRawBuf)
+                for (int ch = 0; ch < channels; ++ch)
+                {
+                    tmpA.copyFrom(ch, 0, bandRawBuf, ch, 0, n);
+                    tmpB.copyFrom(ch, 0, bandRawBuf, ch, 0, n);
+                }
+                apPairs[k][j].applyLP(tmpA, channels, n);
+                apPairs[k][j].applyHP(tmpB, channels, n);
+                // bandRawBuf = tmpA + tmpB（AP の出力）
+                for (int ch = 0; ch < channels; ++ch)
+                {
+                    auto*       out = bandRawBuf.getWritePointer(ch);
+                    const auto* lp  = tmpA.getReadPointer(ch);
+                    const auto* hp  = tmpB.getReadPointer(ch);
+                    for (int i = 0; i < n; ++i)
+                        out[i] = lp[i] + hp[i];
+                }
+            }
+            // bandOuts[k] ← bandRawBuf（AP 済み）
+            for (int ch = 0; ch < channels; ++ch)
+                bandOuts[k].copyFrom(ch, 0, bandRawBuf, ch, 0, n);
+        }
     }
+
+    // 最後のバンド B_{N-1} は restBuf をそのまま使う（N-1 段分の HP を通過済み、AP 不要）
+    for (int ch = 0; ch < channels; ++ch)
+        bandOuts[N - 1].copyFrom(ch, 0, restBuf, ch, 0, n);
 }
 
 } // namespace zl::dsp
