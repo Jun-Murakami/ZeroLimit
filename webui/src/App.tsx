@@ -214,18 +214,18 @@ function App() {
               parameterId='OUTPUT_GAIN'
               label='OUTPUT'
               min={-24}
-              max={24}
+              max={0}
               unit='dB'
               defaultValue={0}
               wheelStep={1}
               wheelStepFine={0.1}
               scaleMarks={[
-                { value: 24, label: '+24' },
-                { value: 12, label: '+12' },
-                { value: 6, label: '+6' },
                 { value: 0, label: '0' },
+                { value: -3, label: '-3' },
                 { value: -6, label: '-6' },
+                { value: -9, label: '-9' },
                 { value: -12, label: '-12' },
+                { value: -18, label: '-18' },
                 { value: -24, label: '-24' },
               ]}
             />

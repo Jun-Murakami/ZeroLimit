@@ -51,11 +51,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout ZeroLimitAudioProcessor::cre
         -1.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB")));
 
-    // OUTPUT_GAIN: -24..+24 dB（既定 0）
+    // OUTPUT_GAIN: -24..0 dB（既定 0）
+    //  リミッター後段のトリム。増幅方向はリミッタが許さないので下方向のみ。
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         zl::id::OUTPUT_GAIN,
         "Output Gain",
-        juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f),
+        juce::NormalisableRange<float>(-24.0f, 0.0f, 0.1f),
         0.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB")));
 

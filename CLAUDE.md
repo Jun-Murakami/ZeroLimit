@@ -10,7 +10,7 @@
 - **対象フォーマット**: VST3 / AU / AAX / Standalone
 - **最小要件**:
   - Threshold（-40..0 dBFS）
-  - Output Gain（-24..+24 dB）
+  - Output Gain（-24..0 dB、下方向トリムのみ）
   - Input L/R、GR、Output L/R の 5 本メーター（トゥルーピーク相当の区間最大）
 
 ### アーキテクチャ
