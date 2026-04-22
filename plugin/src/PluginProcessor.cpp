@@ -43,12 +43,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout ZeroLimitAudioProcessor::cre
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // THRESHOLD: -40..0 dBFS（既定 -1dB ＝ ブロードキャスト向け）
+    // THRESHOLD: -40..0 dBFS（既定 0 dB ＝ バイパス相当）
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         zl::id::THRESHOLD,
         "Threshold",
         juce::NormalisableRange<float>(-40.0f, 0.0f, 0.1f),
-        -1.0f,
+        0.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB")));
 
     // OUTPUT_GAIN: -24..0 dB（既定 0）
