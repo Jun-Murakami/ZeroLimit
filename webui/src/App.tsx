@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Box, Button, Paper, Tooltip, Typography } from '@mui/material';
 import { CssBaseline, ThemeProvider } from '@mui/material';
 import { juceBridge } from './bridge/juce';
-import { useJuceComboBoxIndex, useJuceSliderValue, useJuceToggleValue } from './hooks/useJuceParam';
+import { useJuceComboBoxIndex, useJuceSliderState, useJuceToggleValue } from './hooks/useJuceParam';
 import { darkTheme } from './theme';
 import { ParameterFader } from './components/ParameterFader';
 import {
@@ -101,11 +101,12 @@ function App() {
   //   - どちらかがレンジ端 (-30..0) にぶつかったら、そちらをクランプ。
   //     もう片方は継続可能（オフセット一時崩れ、戻れば回復）。
   //   - JUCE からのエコーで無限ループしないように mirroring 中フラグを見る。
-  // Threshold / Output Gain / Link の購読（useSyncExternalStore 経由）。
-  //  ここでは state（JUCE state オブジェクト）を mirror 処理に使いたいので、
-  //  hook から参照を取り出す。value はモニタリング専用。
-  const { state: thresholdSlider } = useJuceSliderValue('THRESHOLD');
-  const { state: outputGainSlider } = useJuceSliderValue('OUTPUT_GAIN');
+  // Threshold / Output Gain は mirror 処理で state オブジェクトだけ必要なので、
+  //  value の購読をしない useJuceSliderState を使う。これにより T/O の値変化
+  //  （rapid drag 中は毎フレーム発生）で App が再レンダーされなくなり、
+  //  Link ON 時の操作側フェーダーのワブリングが解消される。
+  const thresholdSlider = useJuceSliderState('THRESHOLD');
+  const outputGainSlider = useJuceSliderState('OUTPUT_GAIN');
   const { value: linkActive, setValue: setLinkJuce } = useJuceToggleValue('LINK');
 
   // Link state を listener クロージャから参照するための ref
@@ -291,9 +292,9 @@ function App() {
   //   メーター列のヘッダ(36) + hold 行(14 + mt 2) + モード切替ボタン(24 + mt 8) の 84px を差し引く。
   const meterAndFaderHeight = Math.max(80, Math.floor(mainSize.height - 84));
 
-  //   中央メーター領域の幅 = 全体幅 - フェーダー幅×2 (76×2) - grid の gap 2(=16)×2 = 全体 -184
+  //   中央メーター領域の幅 = 全体幅 - フェーダー幅×2 (60×2) - grid の gap 2(=16)×2 = 全体 -152
   //   そこから GR バー幅(48) と IN/OUT 間のセンターギャップ(0.25×2 = 4) を差し引いて 2 等分。
-  const meterAreaWidth = Math.max(0, mainSize.width - 76 * 2 - 16 * 2);
+  const meterAreaWidth = Math.max(0, mainSize.width - 60 * 2 - 16 * 2);
   const meterColumnWidth = Math.max(52, Math.floor((meterAreaWidth - 48 - 4) / 2));
   //   L/R ペアの各バー幅（gap 0.25 = 2px を引いて半分）
   const levelBarWidth = Math.max(24, Math.floor((meterColumnWidth - 2) / 2));
@@ -428,15 +429,14 @@ function App() {
                   sx={{
                     minWidth: 'auto',
                     px: 1,
-                    py: 0.1,
-                    height: 22,
-                    fontSize: '0.72rem',
+                    py: 0.2,
+                    height: 24,
                     textTransform: 'none',
                     letterSpacing: 0.5,
-                    border: '1px solid',
+                    border: '2px solid',
                     borderColor: linkActive ? 'primary.main' : 'divider',
                     backgroundColor: linkActive ? 'primary.main' : 'transparent',
-                    color: linkActive ? 'background.paper' : 'text.secondary',
+                    color: linkActive ? 'background.paper' : 'text.primary',
                     '&:hover': {
                       backgroundColor: linkActive ? 'primary.dark' : 'grey.700',
                     },
@@ -657,12 +657,13 @@ function App() {
                     width: 92,
                     minWidth: 92,
                     px: 1,
-                    py: 0.2,
-                    height: 24,
-                    border: '2px solid',
+                    py: 0.1,
+                    height: 22,
+                    fontSize: '0.72rem',
+                    border: '1px solid',
                     borderColor: 'divider',
                     backgroundColor: 'transparent',
-                    color: 'text.primary',
+                    color: 'text.secondary',
                     '&:hover': { backgroundColor: 'grey.700' },
                   }}
                   aria-label='meter display mode'

@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
-import react from '@vitejs/plugin-react';
+import react, { reactCompilerPreset } from '@vitejs/plugin-react';
+import babel from '@rolldown/plugin-babel';
 import {
   readFileSync,
   createReadStream,
@@ -107,7 +108,15 @@ function mergePublicWeb(): Plugin {
  * 5. public-web/ からも静的ファイルを配信（WASM, worklet, サンプル音源）
  */
 export default defineConfig({
-  plugins: [react(), mergePublicWeb()],
+  plugins: [
+    react(),
+    babel({
+      // plugin 用ビルドと Web 用ビルドで最適化結果がずれないよう、
+      // こちらの SPA 設定でも同じ React Compiler プリセットを有効にする。
+      presets: [reactCompilerPreset()],
+    }),
+    mergePublicWeb(),
+  ],
   define: {
     'import.meta.env.PACKAGE_VERSION': JSON.stringify(packageJson.version),
     'import.meta.env.VITE_APP_VERSION_FULL': JSON.stringify(fullVersion),

@@ -19,6 +19,16 @@ type ToggleStateMirror = ReturnType<typeof getToggleState>;
 type ComboBoxStateMirror = ReturnType<typeof getComboBoxState>;
 
 // ============================================================================
+// Slider: state だけ取り出す（value は購読しない）
+// ============================================================================
+//  App.tsx で THRESHOLD / OUTPUT_GAIN の mirror ロジック用に state だけ欲しい
+//  場合に使う。購読しないので、値の変化による不要な App 再レンダーが発生しない。
+//  → Link ON 中の rapid drag で生じていたフェーダーのワブリングを軽減。
+export function useJuceSliderState(parameterId: string): NonNullable<SliderStateMirror> | null {
+  return useMemo(() => getSliderState(parameterId) ?? null, [parameterId]);
+}
+
+// ============================================================================
 // Slider: scaled 値を購読する
 // ============================================================================
 export function useJuceSliderValue(parameterId: string): {

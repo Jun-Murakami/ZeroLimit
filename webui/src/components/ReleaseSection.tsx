@@ -44,10 +44,18 @@ export const ReleaseSection: React.FC = () => {
   releaseMsRef.current = releaseMs; // render で参照を同期（useEffect 不要）
 
   // 書き込み: 正規化 0..1 を受けて JUCE に反映。
-  //  useSyncExternalStore が getSnapshot 経由で JUCE の実値を返すので、ローカル mirror 不要。
+  //  ここで渡す t は「我々の log スケール上の 0..1」なので、frontend-mirror に
+  //  そのまま setNormalisedValue させると値がずれる。
+  //  frontend-mirror は lambda 形式の NormalisableRange を認識できず、skew=1 の
+  //  線形換算しか行わない（juce-framework-frontend-mirror の normalisedToScaledValue 参照）。
+  //  そこで一旦 ms に変換 → 線形 [0,1] に戻す → setNormalisedValue に渡す。
+  //  こうすると frontend-mirror が線形で計算した scaled 値 = 我々の ms になり、
+  //  C++ 側のパラメータ（log NormalisableRange）と同じ値で握手できる。
   const applyNormalised = (t: number) => {
     const clampedT = Math.max(0, Math.min(1, t));
-    setNormalised(clampedT);
+    const ms = normToMs(clampedT);
+    const linearT = (ms - MS_MIN) / (MS_MAX - MS_MIN);
+    setNormalised(Math.max(0, Math.min(1, linearT)));
   };
 
   const handleSliderChange = (_: Event, value: number | number[]) => {

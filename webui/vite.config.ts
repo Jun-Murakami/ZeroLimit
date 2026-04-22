@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import react, { reactCompilerPreset } from '@vitejs/plugin-react'
+import babel from '@rolldown/plugin-babel'
 import { readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, resolve as resolvePath } from 'path'
@@ -21,7 +22,14 @@ const packageJson = JSON.parse(readFileSync(resolvePath(__dirname, 'package.json
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    babel({
+      // React Compiler は @vitejs/plugin-react v6 では reactCompilerPreset() 経由で有効化する。
+      // これにより JSX/React コンポーネントの変換時にコンパイラ最適化が適用される。
+      presets: [reactCompilerPreset()],
+    }),
+  ],
   define: {
     'import.meta.env.PACKAGE_VERSION': JSON.stringify(packageJson.version),
     'import.meta.env.VITE_APP_VERSION_FULL': JSON.stringify(fullVersion),

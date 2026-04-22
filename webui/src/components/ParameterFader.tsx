@@ -202,17 +202,20 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
   }, [min, max, wheelStep, wheelStepFine]);
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 76, position: 'relative' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 60, position: 'relative' }}>
       {/* ラベルは固定高さ 36px のヘッダ領域に配置。
           - つまみ（高さ 28px）が最大位置で rail 上端を突き抜けても、この余白が確保されているため被らない。
-          - メーター列も同じ 36px ヘッダを持たせることで、rail 上端とバー上端が自動的に揃う。 */}
+          - メーター列も同じ 36px ヘッダを持たせることで、rail 上端とバー上端が自動的に揃う。
+          目盛りラベル(scaleMarks)は inner wrapper 基準で絶対配置しているので、
+          外枠幅を詰めても目盛りが右のグリッドギャップにオーバーハングするだけで見た目は保たれる。 */}
       <Box sx={{ height: 36, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', width: '100%' }}>
         <Typography
           variant='caption'
           sx={{
             fontWeight: 600,
+            fontSize: '0.68rem',
             color: active ? 'primary.main' : 'text.secondary',
-            letterSpacing: '0.5px',
+            letterSpacing: '0.3px',
             lineHeight: 1,
           }}
         >
