@@ -128,10 +128,10 @@ export const GainReductionMeterBar: React.FC<{ grDb: number; width?: number; hei
 
     const u = grToUnit(grDb);
     const barHeight = u * cssH;
-    // 圧縮量が深くなるほど（バーが下に伸びるほど）赤に近づく向きでグラデーション。
+    // 圧縮量が深くなるほど（バーが下に伸びるほど）赤に近づく向きで、上から下まで一直線にリニア遷移。
+    // 深い圧縮まで届かない軽い動作時でも色の差分が見えるよう中間の停滞帯は設けない。
     const grad = ctx.createLinearGradient(0, 0, 0, cssH);
     grad.addColorStop(0, '#ffab00');
-    grad.addColorStop(0.6, '#ffab00');
     grad.addColorStop(1, '#ff5252');
 
     ctx.fillStyle = grad;
