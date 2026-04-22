@@ -7,13 +7,14 @@ namespace zl::dsp {
 void ZeroLatencyLimiter::prepare(double sampleRate, int /*numChannels*/)
 {
     currentSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
-    updateReleaseCoeff();
+    updateReleaseCoeffs();
     reset();
 }
 
 void ZeroLatencyLimiter::reset()
 {
-    currentGain = 1.0f;
+    currentGain     = 1.0f;
+    currentGainSlow = 1.0f;
 }
 
 void ZeroLatencyLimiter::setThresholdDb(float thresholdDb)
@@ -25,16 +26,18 @@ void ZeroLatencyLimiter::setThresholdDb(float thresholdDb)
 
 void ZeroLatencyLimiter::setReleaseMs(float ms)
 {
-    releaseMs = std::max(1.0f, std::min(2000.0f, ms));
-    updateReleaseCoeff();
+    // 0.01ms .. 1000ms の範囲を許容。Auto Release モードでは fast envelope として使われる。
+    releaseMs = std::max(0.01f, std::min(1000.0f, ms));
+    updateReleaseCoeffs();
 }
 
-void ZeroLatencyLimiter::updateReleaseCoeff()
+void ZeroLatencyLimiter::updateReleaseCoeffs()
 {
-    // 1 サンプル当たりの乗算係数。targetGain へ exp で近づく。
-    // coeff = exp(-1 / (tau_samples)) （tau_samples = release_sec * fs）
-    const double tauSamples = (static_cast<double>(releaseMs) * 0.001) * currentSampleRate;
-    releaseCoeff = tauSamples > 0.0 ? static_cast<float>(std::exp(-1.0 / tauSamples)) : 0.0f;
+    // coeff = exp(-1 / tau_samples)。tau_samples = (ms * 1e-3) * fs
+    const double tauFast = (static_cast<double>(releaseMs)             * 0.001) * currentSampleRate;
+    const double tauSlow = (static_cast<double>(kAutoSlowReleaseMs)    * 0.001) * currentSampleRate;
+    releaseCoeff     = tauFast > 0.0 ? static_cast<float>(std::exp(-1.0 / tauFast)) : 0.0f;
+    slowReleaseCoeff = tauSlow > 0.0 ? static_cast<float>(std::exp(-1.0 / tauSlow)) : 0.0f;
 }
 
 float ZeroLatencyLimiter::processSample(float& sampleL, float& sampleR) noexcept
@@ -46,15 +49,19 @@ float ZeroLatencyLimiter::processSample(float& sampleL, float& sampleR) noexcept
     if (absMax > thresholdLin && absMax > 0.0f)
         targetGain = thresholdLin / absMax;
 
-    // アタック即時（下方向）、リリースは時定数で上方向へ緩やかに
-    if (targetGain < currentGain)
-        currentGain = targetGain;
-    else
-        currentGain = targetGain + (currentGain - targetGain) * releaseCoeff;
+    // fast envelope（アタック瞬時、指数リリース）
+    if (targetGain < currentGain) currentGain = targetGain;
+    else                          currentGain = targetGain + (currentGain - targetGain) * releaseCoeff;
 
-    sampleL *= currentGain;
-    sampleR *= currentGain;
-    return currentGain;
+    // slow envelope（常時更新して Auto Release 切替時のグリッチを避ける）
+    if (targetGain < currentGainSlow) currentGainSlow = targetGain;
+    else                              currentGainSlow = targetGain + (currentGainSlow - targetGain) * slowReleaseCoeff;
+
+    const float applied = autoReleaseEnabled ? std::min(currentGain, currentGainSlow) : currentGain;
+
+    sampleL *= applied;
+    sampleR *= applied;
+    return applied;
 }
 
 float ZeroLatencyLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcept
@@ -66,7 +73,8 @@ float ZeroLatencyLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcep
 
     float minGainObserved = 1.0f;
 
-    // モノラル時も同じロジックで問題なく動作するよう、absMax は可変チャネルで算出
+    const bool arc = autoReleaseEnabled;
+
     if (numChannels == 1)
     {
         auto* ch = buffer.getWritePointer(0);
@@ -80,8 +88,13 @@ float ZeroLatencyLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcep
             if (targetGain < currentGain) currentGain = targetGain;
             else                          currentGain = targetGain + (currentGain - targetGain) * releaseCoeff;
 
-            ch[i] *= currentGain;
-            if (currentGain < minGainObserved) minGainObserved = currentGain;
+            if (targetGain < currentGainSlow) currentGainSlow = targetGain;
+            else                              currentGainSlow = targetGain + (currentGainSlow - targetGain) * slowReleaseCoeff;
+
+            const float applied = arc ? std::min(currentGain, currentGainSlow) : currentGain;
+
+            ch[i] *= applied;
+            if (applied < minGainObserved) minGainObserved = applied;
         }
         return minGainObserved;
     }
@@ -100,14 +113,18 @@ float ZeroLatencyLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcep
         if (targetGain < currentGain) currentGain = targetGain;
         else                          currentGain = targetGain + (currentGain - targetGain) * releaseCoeff;
 
-        left[i]  *= currentGain;
-        right[i] *= currentGain;
+        if (targetGain < currentGainSlow) currentGainSlow = targetGain;
+        else                              currentGainSlow = targetGain + (currentGainSlow - targetGain) * slowReleaseCoeff;
 
-        // 追加チャネル（>2ch）は左右ペアに倣ってゲインを掛ける
+        const float applied = arc ? std::min(currentGain, currentGainSlow) : currentGain;
+
+        left[i]  *= applied;
+        right[i] *= applied;
+
         for (int ch = 2; ch < numChannels; ++ch)
-            buffer.getWritePointer(ch)[i] *= currentGain;
+            buffer.getWritePointer(ch)[i] *= applied;
 
-        if (currentGain < minGainObserved) minGainObserved = currentGain;
+        if (applied < minGainObserved) minGainObserved = applied;
     }
     return minGainObserved;
 }

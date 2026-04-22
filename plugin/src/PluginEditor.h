@@ -29,12 +29,18 @@ private:
     ZeroLimitAudioProcessor& audioProcessor;
 
     // Web パラメータリレー（WebBrowserComponent より先に宣言）
-    juce::WebSliderRelay webThresholdRelay;
-    juce::WebSliderRelay webOutputGainRelay;
+    juce::WebSliderRelay       webThresholdRelay;
+    juce::WebSliderRelay       webOutputGainRelay;
+    juce::WebSliderRelay       webReleaseMsRelay;
+    juce::WebToggleButtonRelay webAutoReleaseRelay;
+    juce::WebComboBoxRelay     webMeteringModeRelay;
 
     // APVTS ←→ Web バインディング
-    juce::WebSliderParameterAttachment thresholdAttachment;
-    juce::WebSliderParameterAttachment outputGainAttachment;
+    juce::WebSliderParameterAttachment       thresholdAttachment;
+    juce::WebSliderParameterAttachment       outputGainAttachment;
+    juce::WebSliderParameterAttachment       releaseMsAttachment;
+    juce::WebToggleButtonParameterAttachment autoReleaseAttachment;
+    juce::WebComboBoxParameterAttachment     meteringModeAttachment;
 
     juce::WebControlParameterIndexReceiver controlParameterIndexReceiver;
 
@@ -54,6 +60,14 @@ private:
     juce::ComponentBoundsConstrainer resizerConstraints;
 
     std::atomic<bool> isShuttingDown{ false };
+
+#if defined(JUCE_WINDOWS)
+    // DPI 変化検出: ディスプレイ間移動で HWND 基準の DPI が変わったときに、
+    //   強制的に再レイアウトを走らせて画面の見切れを防ぐ。
+    double lastHwndScaleFactor { 0.0 };
+    int    lastHwndDpi         { 0 };
+    void   pollAndMaybeNotifyDpiChange();
+#endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ZeroLimitAudioProcessorEditor)
 };

@@ -18,8 +18,11 @@ public:
 
     // スレッショルド（dBFS, -40..0）
     void setThresholdDb(float thresholdDb);
-    // リリース時定数（ms）。デフォルト 50ms 程度がブロードキャスト向き
+    // 手動リリース時定数（ms）。Auto Release OFF 時に使用。
     void setReleaseMs(float releaseMs);
+    // Auto Release モード。ON 時は fast/slow envelope の min を適用し、
+    // 手動リリース時定数は無視される（内部は fast envelope として流用）。
+    void setAutoReleaseEnabled(bool enabled) noexcept { autoReleaseEnabled = enabled; }
 
     // 1 サンプルステレオ処理のためのインライン API
     // - sampleL/R を in-place で更新する
@@ -33,12 +36,22 @@ public:
 
 private:
     float thresholdLin = 1.0f;  // リニア振幅（0..1）。0dBFS = 1.0
-    float releaseCoeff = 0.9995f;
-    float currentGain  = 1.0f;   // 現在適用中のゲイン（1.0 で無リダクション）
-    double currentSampleRate = 44100.0;
-    float releaseMs = 50.0f;
 
-    void updateReleaseCoeff();
+    // Fast envelope（手動リリース設定に追従）
+    float releaseCoeff = 0.9995f;
+    float currentGain  = 1.0f;
+    float releaseMs = 1.0f;
+
+    // Slow envelope（Auto Release 用。~150 ms で固定）
+    float slowReleaseCoeff = 0.9999f;
+    float currentGainSlow  = 1.0f;
+    static constexpr float kAutoSlowReleaseMs = 150.0f;
+
+    bool autoReleaseEnabled = true;
+
+    double currentSampleRate = 44100.0;
+
+    void updateReleaseCoeffs();
 };
 
 } // namespace zl::dsp

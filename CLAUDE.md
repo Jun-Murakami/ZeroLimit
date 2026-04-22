@@ -9,8 +9,8 @@
 - **目的**: ブロードキャスト最終段向けに、ルックアヘッド無しでピークを即時抑制するシンプルなブリックウォール・リミッター
 - **対象フォーマット**: VST3 / AU / AAX / Standalone
 - **最小要件**:
-  - Threshold（-40..0 dBFS）
-  - Output Gain（-40..0 dB、下方向トリムのみ。Threshold と同じレンジ）
+  - Threshold（-30..0 dBFS、L2 準拠）
+  - Output Gain（-30..0 dB、下方向トリムのみ。Threshold と同じレンジ）
   - Input L/R、GR、Output L/R の 5 本メーター（トゥルーピーク相当の区間最大）
 
 ### アーキテクチャ

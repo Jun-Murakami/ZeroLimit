@@ -1,16 +1,20 @@
 // ZeroLimit: ゼロレイテンシー・リミッター用の型定義
 
 // メーターレベル（dBFS スケール）
+// - Peak モード: truePeakLeft/Right が入る
+// - RMS モード:  rmsLeft/Right が入る
+// - Momentary:   momentary（LKFS 単一値）が入る
 export interface StereoMeter {
   truePeakLeft?: number;
   truePeakRight?: number;
+  rmsLeft?: number;
+  rmsRight?: number;
+  momentary?: number;
 }
 
 // JUCE → WebUI のメーター更新イベント
-// - input:  入力段のトゥルーピーク相当（区間最大 dB）
-// - output: 出力段のトゥルーピーク相当（区間最大 dB）
-// - grDb:   区間最大のゲインリダクション（正値 dB, 0 = リダクションなし）
 export interface MeterUpdateData {
+  meteringMode?: number; // 0=Peak / 1=RMS / 2=Momentary
   input?: StereoMeter;
   output?: StereoMeter;
   grDb?: number;

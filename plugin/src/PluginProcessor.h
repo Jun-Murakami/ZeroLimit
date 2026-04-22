@@ -7,6 +7,7 @@
 
 #include "ParameterIDs.h"
 #include "dsp/Limiter.h"
+#include "dsp/MomentaryProcessor.h"
 
 class ZeroLimitAudioProcessor : public juce::AudioProcessor
 {
@@ -60,11 +61,25 @@ public:
     std::atomic<float> outPeakAccumR{ 0.0f };
     std::atomic<float> minGainAccum { 1.0f };  // 区間最小ゲイン（= 最大リダクション）
 
+    // 区間 RMS の蓄積（ブロックごとの RMS を最大値蓄積）
+    std::atomic<float> inRmsAccumL { 0.0f };
+    std::atomic<float> inRmsAccumR { 0.0f };
+    std::atomic<float> outRmsAccumL{ 0.0f };
+    std::atomic<float> outRmsAccumR{ 0.0f };
+
+    // Momentary LKFS（UI タイマーから getMomentaryLKFS() で読む）
+    zl::dsp::MomentaryProcessor inputMomentary;
+    zl::dsp::MomentaryProcessor outputMomentary;
+
 private:
     juce::AudioProcessorValueTreeState parameters;
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     zl::dsp::ZeroLatencyLimiter limiter;
+
+    // processBlock で入力信号を保持するための作業用バッファ
+    //  - 出力段リミッタが in-place で書き換えるため、入力側メータ/Momentary 用に複製を取る
+    juce::AudioBuffer<float> inputCopyBuffer;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ZeroLimitAudioProcessor)
 };

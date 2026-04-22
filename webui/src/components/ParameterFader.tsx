@@ -10,8 +10,6 @@ interface ParameterFaderProps {
   min: number;
   /** 値の表示レンジ上限 */
   max: number;
-  /** 単位（"dB" など。未指定時は非表示） */
-  unit?: string;
   /** ラベル */
   label: string;
   /** 目盛りに配置する実値の配列（下→上の順） */
@@ -25,6 +23,8 @@ interface ParameterFaderProps {
   /** フェーダーのトラック色 */
   color?: 'primary' | 'secondary';
   active?: boolean;
+  /** フェーダー本体の高さ（メーターと揃える用途で外から制御） */
+  sliderHeight?: number;
 }
 
 const StyledSlider = styled(Slider)(({ theme }) => {
@@ -126,7 +126,6 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
   parameterId,
   min,
   max,
-  unit,
   label,
   scaleMarks,
   defaultValue,
@@ -134,8 +133,9 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
   wheelStepFine = 0.1,
   color = 'primary',
   active = true,
+  sliderHeight,
 }) => {
-  const SLIDER_HEIGHT = 160;
+  const SLIDER_HEIGHT = sliderHeight ?? 160;
 
   const sliderStateRef = useRef<ReturnType<typeof getSliderState> | null>(null);
   if (sliderStateRef.current === null) sliderStateRef.current = getSliderState(parameterId) || null;
@@ -222,12 +222,22 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 76, position: 'relative' }}>
-      <Typography
-        variant='caption'
-        sx={{ mb: 0.5, fontWeight: 600, color: active ? 'primary.main' : 'text.secondary', letterSpacing: '0.5px' }}
-      >
-        {label}
-      </Typography>
+      {/* ラベルは固定高さ 36px のヘッダ領域に配置。
+          - つまみ（高さ 28px）が最大位置で rail 上端を突き抜けても、この余白が確保されているため被らない。
+          - メーター列も同じ 36px ヘッダを持たせることで、rail 上端とバー上端が自動的に揃う。 */}
+      <Box sx={{ height: 36, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', width: '100%' }}>
+        <Typography
+          variant='caption'
+          sx={{
+            fontWeight: 600,
+            color: active ? 'primary.main' : 'text.secondary',
+            letterSpacing: '0.5px',
+            lineHeight: 1,
+          }}
+        >
+          {label}
+        </Typography>
+      </Box>
 
       <Box sx={{ display: 'flex', height: SLIDER_HEIGHT, width: '100%', justifyContent: 'center', mb: '14px' }}>
         <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center' }} ref={wheelRef}>
@@ -295,6 +305,8 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
         </Box>
       </Box>
 
+      {/* mt: '10px' — フェーダー側入力ボックスの上端を、メーター側モード切替ボタンの
+          上端とほぼ同じ Y に合わせるための余白（slider の mb 14px 分だけでは足りない差分）。 */}
       <StyledInput
         className='block-host-shortcuts'
         value={inputText}
@@ -302,8 +314,7 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
         onBlur={commitInput}
         onKeyDown={handleInputKeyDown}
         disableUnderline
-        sx={{ mt: 0.5 }}
-        endAdornment={unit ? <Typography variant='caption' sx={{ fontSize: '9px', pl: 0.5 }}>{unit}</Typography> : undefined}
+        sx={{ mt: '10px' }}
       />
     </Box>
   );

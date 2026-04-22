@@ -43,23 +43,52 @@ juce::AudioProcessorValueTreeState::ParameterLayout ZeroLimitAudioProcessor::cre
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // THRESHOLD: -40..0 dBFS（既定 0 dB ＝ バイパス相当）
+    // THRESHOLD: -30..0 dBFS（既定 0 dB ＝ バイパス相当）
+    //  業界標準の Waves L2 に合わせ、下限は -30 dB とする。
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         zl::id::THRESHOLD,
         "Threshold",
-        juce::NormalisableRange<float>(-40.0f, 0.0f, 0.1f),
+        juce::NormalisableRange<float>(-30.0f, 0.0f, 0.1f),
         0.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB")));
 
-    // OUTPUT_GAIN: -40..0 dB（既定 0）
+    // OUTPUT_GAIN: -30..0 dB（既定 0）
     //  リミッター後段のトリム。増幅方向はリミッタが許さないので下方向のみ。
-    //  感覚的に Threshold とレンジを揃える。
+    //  Threshold とレンジを統一（L2 準拠の -30 dB まで）。
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         zl::id::OUTPUT_GAIN,
         "Output Gain",
-        juce::NormalisableRange<float>(-40.0f, 0.0f, 0.1f),
+        juce::NormalisableRange<float>(-30.0f, 0.0f, 0.1f),
         0.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB")));
+
+    // METERING_MODE: Peak / RMS / Momentary（UI 表示の切替、非オートメーション想定）
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        zl::id::METERING_MODE,
+        "Metering Mode",
+        juce::StringArray{ "Peak", "RMS", "Momentary" },
+        0));
+
+    // RELEASE_MS: 0.01 .. 1000 ms、対数マッピング（各デケードが等しく分布）
+    //  convert: t=0 -> 0.01, t=0.2 -> 0.1, t=0.4 -> 1.0, ..., t=1 -> 1000
+    juce::NormalisableRange<float> releaseRange(
+        0.01f, 1000.0f,
+        [](float start, float end, float t)  { return start * std::pow(end / start, t); },
+        [](float start, float end, float v)  { return std::log(v / start) / std::log(end / start); },
+        [](float start, float end, float v)  { return juce::jlimit(start, end, v); });
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        zl::id::RELEASE_MS,
+        "Release",
+        releaseRange,
+        1.0f,
+        juce::AudioParameterFloatAttributes().withLabel("ms")));
+
+    // AUTO_RELEASE: プログラム依存リリース。既定は ON（L1/L2 的な破綻しない動作）。
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        zl::id::AUTO_RELEASE,
+        "Auto Release",
+        true));
 
     return { params.begin(), params.end() };
 }
@@ -76,18 +105,33 @@ void ZeroLimitAudioProcessor::setCurrentProgram(int) {}
 const juce::String ZeroLimitAudioProcessor::getProgramName(int) { return {}; }
 void ZeroLimitAudioProcessor::changeProgramName(int, const juce::String&) {}
 
-void ZeroLimitAudioProcessor::prepareToPlay(double sampleRate, int /*samplesPerBlock*/)
+void ZeroLimitAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     limiter.prepare(sampleRate, getTotalNumOutputChannels());
-    limiter.setReleaseMs(50.0f); // ブロードキャスト向けデフォルト
 
     if (auto* p = parameters.getRawParameterValue(zl::id::THRESHOLD.getParamID()))
         limiter.setThresholdDb(p->load());
+    if (auto* p = parameters.getRawParameterValue(zl::id::RELEASE_MS.getParamID()))
+        limiter.setReleaseMs(p->load());
+    if (auto* p = parameters.getRawParameterValue(zl::id::AUTO_RELEASE.getParamID()))
+        limiter.setAutoReleaseEnabled(p->load() > 0.5f);
+
+    inputMomentary.prepareToPlay(sampleRate, samplesPerBlock);
+    outputMomentary.prepareToPlay(sampleRate, samplesPerBlock);
+
+    inputCopyBuffer.setSize(getTotalNumInputChannels(),
+                            samplesPerBlock,
+                            /*keepExistingContent*/ false,
+                            /*clearExtraSpace*/     true,
+                            /*avoidReallocating*/   false);
 }
 
 void ZeroLimitAudioProcessor::releaseResources()
 {
     limiter.reset();
+    inputMomentary.reset();
+    outputMomentary.reset();
+    inputCopyBuffer.setSize(0, 0);
 }
 
 bool ZeroLimitAudioProcessor::isBusesLayoutSupported(const juce::AudioProcessor::BusesLayout& layouts) const
@@ -113,21 +157,46 @@ void ZeroLimitAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     // パラメータ取得
     const float thresholdDb = parameters.getRawParameterValue(zl::id::THRESHOLD.getParamID())->load();
     const float outGainDb   = parameters.getRawParameterValue(zl::id::OUTPUT_GAIN.getParamID())->load();
+    const float releaseMs   = parameters.getRawParameterValue(zl::id::RELEASE_MS.getParamID())->load();
+    const bool  autoRel     = parameters.getRawParameterValue(zl::id::AUTO_RELEASE.getParamID())->load() > 0.5f;
     limiter.setThresholdDb(thresholdDb);
+    limiter.setReleaseMs(releaseMs);
+    limiter.setAutoReleaseEnabled(autoRel);
 
-    // --- 入力段メータ ---
-    float inPeakL = 0.0f, inPeakR = 0.0f;
+    // --- 入力信号のコピー（破壊前に取る）---
+    if (inputCopyBuffer.getNumChannels() != numChannels
+        || inputCopyBuffer.getNumSamples() < numSamples)
     {
-        auto* l = buffer.getReadPointer(0);
-        auto* r = buffer.getReadPointer(std::min(1, numChannels - 1));
+        inputCopyBuffer.setSize(numChannels, numSamples, false, false, /*avoidReallocating=*/true);
+    }
+    for (int ch = 0; ch < numChannels; ++ch)
+        inputCopyBuffer.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+
+    // --- 入力段メータ（Peak + RMS）---
+    {
+        auto* l = inputCopyBuffer.getReadPointer(0);
+        auto* r = inputCopyBuffer.getReadPointer(std::min(1, numChannels - 1));
+        float inPeakL = 0.0f, inPeakR = 0.0f;
+        float sumSqL = 0.0f, sumSqR = 0.0f;
         for (int i = 0; i < numSamples; ++i)
         {
-            inPeakL = std::max(inPeakL, std::abs(l[i]));
-            inPeakR = std::max(inPeakR, std::abs(r[i]));
+            const float al = std::abs(l[i]);
+            const float ar = std::abs(r[i]);
+            inPeakL = std::max(inPeakL, al);
+            inPeakR = std::max(inPeakR, ar);
+            sumSqL += l[i] * l[i];
+            sumSqR += r[i] * r[i];
         }
+        atomicMaxFloat(inPeakAccumL, inPeakL);
+        atomicMaxFloat(inPeakAccumR, inPeakR);
+
+        const float invN = 1.0f / static_cast<float>(numSamples);
+        atomicMaxFloat(inRmsAccumL, std::sqrt(sumSqL * invN));
+        atomicMaxFloat(inRmsAccumR, std::sqrt(sumSqR * invN));
     }
-    atomicMaxFloat(inPeakAccumL, inPeakL);
-    atomicMaxFloat(inPeakAccumR, inPeakR);
+
+    // --- 入力 Momentary ---
+    inputMomentary.processBlock(inputCopyBuffer);
 
     // --- リミッター ---
     const float minGain = limiter.processBlock(buffer);
@@ -141,19 +210,31 @@ void ZeroLimitAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
             buffer.applyGain(ch, 0, numSamples, outLin);
     }
 
-    // --- 出力段メータ ---
-    float outPeakL = 0.0f, outPeakR = 0.0f;
+    // --- 出力段メータ（Peak + RMS）---
     {
         auto* l = buffer.getReadPointer(0);
         auto* r = buffer.getReadPointer(std::min(1, numChannels - 1));
+        float outPeakL = 0.0f, outPeakR = 0.0f;
+        float sumSqL = 0.0f, sumSqR = 0.0f;
         for (int i = 0; i < numSamples; ++i)
         {
-            outPeakL = std::max(outPeakL, std::abs(l[i]));
-            outPeakR = std::max(outPeakR, std::abs(r[i]));
+            const float al = std::abs(l[i]);
+            const float ar = std::abs(r[i]);
+            outPeakL = std::max(outPeakL, al);
+            outPeakR = std::max(outPeakR, ar);
+            sumSqL += l[i] * l[i];
+            sumSqR += r[i] * r[i];
         }
+        atomicMaxFloat(outPeakAccumL, outPeakL);
+        atomicMaxFloat(outPeakAccumR, outPeakR);
+
+        const float invN = 1.0f / static_cast<float>(numSamples);
+        atomicMaxFloat(outRmsAccumL, std::sqrt(sumSqL * invN));
+        atomicMaxFloat(outRmsAccumR, std::sqrt(sumSqR * invN));
     }
-    atomicMaxFloat(outPeakAccumL, outPeakL);
-    atomicMaxFloat(outPeakAccumR, outPeakR);
+
+    // --- 出力 Momentary ---
+    outputMomentary.processBlock(buffer);
 }
 
 bool ZeroLimitAudioProcessor::hasEditor() const { return true; }

@@ -6,6 +6,10 @@
 #include <unordered_map>
 #include <cmath>
 
+#if defined(JUCE_WINDOWS)
+ #include <windows.h>
+#endif
+
 #if __has_include(<WebViewFiles.h>)
 #include <WebViewFiles.h>
 #endif
@@ -79,6 +83,53 @@ std::vector<std::byte> getWebViewFileAsBytes(const juce::String& filepath)
 }
 #endif
 
+#if defined(JUCE_WINDOWS)
+// HWND 基準の DPI を取得し、スケール係数へ変換。
+//  - Per-Monitor V2 に対応するため GetDpiForWindow を優先。
+//  - 取得失敗時は GetDpiForMonitor にフォールバック。
+static void queryWindowDpi(HWND hwnd, int& outDpi, double& outScale)
+{
+    outDpi = 0;
+    outScale = 1.0;
+    if (hwnd == nullptr) return;
+
+    HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
+    if (user32 != nullptr)
+    {
+        using GetDpiForWindowFn = UINT (WINAPI*)(HWND);
+        auto pGetDpiForWindow = reinterpret_cast<GetDpiForWindowFn>(::GetProcAddress(user32, "GetDpiForWindow"));
+        if (pGetDpiForWindow != nullptr)
+        {
+            const UINT dpi = pGetDpiForWindow(hwnd);
+            if (dpi != 0)
+            {
+                outDpi = static_cast<int>(dpi);
+                outScale = static_cast<double>(dpi) / 96.0;
+                return;
+            }
+        }
+    }
+
+    HMODULE shcore = ::LoadLibraryW(L"Shcore.dll");
+    if (shcore != nullptr)
+    {
+        using GetDpiForMonitorFn = HRESULT (WINAPI*)(HMONITOR, int, UINT*, UINT*);
+        auto pGetDpiForMonitor = reinterpret_cast<GetDpiForMonitorFn>(::GetProcAddress(shcore, "GetDpiForMonitor"));
+        if (pGetDpiForMonitor != nullptr)
+        {
+            HMONITOR mon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            UINT dpiX = 0, dpiY = 0;
+            if (SUCCEEDED(pGetDpiForMonitor(mon, 0 /*MDT_EFFECTIVE_DPI*/, &dpiX, &dpiY)))
+            {
+                outDpi = static_cast<int>(dpiX);
+                outScale = static_cast<double>(dpiX) / 96.0;
+            }
+        }
+        ::FreeLibrary(shcore);
+    }
+}
+#endif
+
 } // namespace
 
 //==============================================================================
@@ -86,10 +137,16 @@ std::vector<std::byte> getWebViewFileAsBytes(const juce::String& filepath)
 ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProcessor& p)
     : AudioProcessorEditor(&p),
       audioProcessor(p),
-      webThresholdRelay  { zl::id::THRESHOLD.getParamID() },
-      webOutputGainRelay { zl::id::OUTPUT_GAIN.getParamID() },
-      thresholdAttachment  { *p.getState().getParameter(zl::id::THRESHOLD.getParamID()),   webThresholdRelay,  nullptr },
-      outputGainAttachment { *p.getState().getParameter(zl::id::OUTPUT_GAIN.getParamID()), webOutputGainRelay, nullptr },
+      webThresholdRelay    { zl::id::THRESHOLD.getParamID() },
+      webOutputGainRelay   { zl::id::OUTPUT_GAIN.getParamID() },
+      webReleaseMsRelay    { zl::id::RELEASE_MS.getParamID() },
+      webAutoReleaseRelay  { zl::id::AUTO_RELEASE.getParamID() },
+      webMeteringModeRelay { zl::id::METERING_MODE.getParamID() },
+      thresholdAttachment    { *p.getState().getParameter(zl::id::THRESHOLD.getParamID()),     webThresholdRelay,    nullptr },
+      outputGainAttachment   { *p.getState().getParameter(zl::id::OUTPUT_GAIN.getParamID()),   webOutputGainRelay,   nullptr },
+      releaseMsAttachment    { *p.getState().getParameter(zl::id::RELEASE_MS.getParamID()),    webReleaseMsRelay,    nullptr },
+      autoReleaseAttachment  { *p.getState().getParameter(zl::id::AUTO_RELEASE.getParamID()),  webAutoReleaseRelay,  nullptr },
+      meteringModeAttachment { *p.getState().getParameter(zl::id::METERING_MODE.getParamID()), webMeteringModeRelay, nullptr },
       webView{
           juce::WebBrowserComponent::Options{}
               .withBackend(juce::WebBrowserComponent::Options::Backend::webview2)
@@ -106,11 +163,41 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
               .withOptionsFrom(controlParameterIndexReceiver)
               .withOptionsFrom(webThresholdRelay)
               .withOptionsFrom(webOutputGainRelay)
+              .withOptionsFrom(webReleaseMsRelay)
+              .withOptionsFrom(webAutoReleaseRelay)
+              .withOptionsFrom(webMeteringModeRelay)
               .withNativeFunction(
                   juce::Identifier{"system_action"},
                   [this](const juce::Array<juce::var>& args,
                          juce::WebBrowserComponent::NativeFunctionCompletion completion)
                   { handleSystemAction(args, std::move(completion)); })
+              .withNativeFunction(
+                  juce::Identifier{"window_action"},
+                  [this](const juce::Array<juce::var>& args,
+                         juce::WebBrowserComponent::NativeFunctionCompletion completion)
+                  {
+                      if (args.size() > 0)
+                      {
+                          const auto action = args[0].toString();
+                          if (action == "resizeTo" && args.size() >= 3)
+                          {
+                              const int w = juce::roundToInt((double) args[1]);
+                              const int h = juce::roundToInt((double) args[2]);
+                              setSize(w, h);
+                              completion(juce::var{ true });
+                              return;
+                          }
+                          if (action == "resizeBy" && args.size() >= 3)
+                          {
+                              const int dw = juce::roundToInt((double) args[1]);
+                              const int dh = juce::roundToInt((double) args[2]);
+                              setSize(getWidth() + dw, getHeight() + dh);
+                              completion(juce::var{ true });
+                              return;
+                          }
+                      }
+                      completion(juce::var{ false });
+                  })
               .withNativeFunction(
                   juce::Identifier{"open_url"},
                   [](const juce::Array<juce::var>& args,
@@ -137,11 +224,20 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
     // 初期サイズ
     setSize(500, 420);
 
-    // リサイズ可能に（Standalone 時の利便性）
-    setResizable(true, false);
-    resizerConstraints.setSizeLimits(392, 320, 1200, 900);
+    // リサイズ可能に（プラグイン/スタンドアロン共通）
+    setResizable(true, true);
+    setResizeLimits(420, 500, 2560, 1440);
+    resizerConstraints.setSizeLimits(420, 500, 2560, 1440);
+
+    // リサイズグリッパー。WebView よりも前面に置き、WebUI 側の overlay から
+    //   window_action.resizeTo を受けた時にも本体を正しく追従させる。
     resizer.reset(new juce::ResizableCornerComponent(this, &resizerConstraints));
     addAndMakeVisible(resizer.get());
+    resizer->setAlwaysOnTop(true);
+
+    // ホスト側の最小画面表示量
+    if (auto* constrainer = getConstrainer())
+        constrainer->setMinimumOnscreenAmounts(50, 50, 50, 50);
 
     if (useLocalDevServer)
         webView.goToURL(LOCAL_DEV_SERVER_ADDRESS);
@@ -166,7 +262,11 @@ void ZeroLimitAudioProcessorEditor::resized()
 {
     webView.setBounds(getLocalBounds());
     if (resizer)
-        resizer->setBounds(getWidth() - 16, getHeight() - 16, 16, 16);
+    {
+        const int gripperSize = 24;
+        resizer->setBounds(getWidth() - gripperSize, getHeight() - gripperSize, gripperSize, gripperSize);
+        resizer->toFront(true);
+    }
 }
 
 std::optional<ZeroLimitAudioProcessorEditor::Resource>
@@ -211,41 +311,142 @@ void ZeroLimitAudioProcessorEditor::handleSystemAction(const juce::Array<juce::v
     completion(juce::var{});
 }
 
+#if defined(JUCE_WINDOWS)
+// HWND 基準の DPI をポーリングし、変化時に再レイアウトを強制する。
+//  - JUCE の AudioProcessorEditor は DPI 変化時に自動で再レイアウトしないことがあり、
+//    特にモニター間移動で WebView 領域が見切れる症状が出る。
+//  - `setSize(w+1, h+1); setSize(w, h);` の 2 段でダミー変更 → 元サイズに戻し、
+//    内部の resized() を強制発火させる（MixCompare と同じ手当て）。
+void ZeroLimitAudioProcessorEditor::pollAndMaybeNotifyDpiChange()
+{
+    auto* peer = getPeer();
+    if (peer == nullptr) return;
+
+    HWND hwnd = (HWND) peer->getNativeHandle();
+    int dpi = 0;
+    double scale = 1.0;
+    queryWindowDpi(hwnd, dpi, scale);
+    if (dpi <= 0) return;
+
+    const bool scaleChanged = std::abs(lastHwndScaleFactor - scale) >= 0.01;
+    const bool dpiChanged   = lastHwndDpi != dpi;
+    if (! (scaleChanged || dpiChanged)) return;
+
+    lastHwndScaleFactor = scale;
+    lastHwndDpi = dpi;
+
+    // WebUI にも通知（任意の CSS 調整に利用可能）
+    juce::DynamicObject::Ptr payload{ new juce::DynamicObject{} };
+    payload->setProperty("scale", scale);
+    payload->setProperty("dpi", dpi);
+    webView.emitEventIfBrowserIsVisible("dpiScaleChanged", payload.get());
+
+    // 見切れ回避のために強制再レイアウト
+    const int w = getWidth();
+    const int h = getHeight();
+    setSize(w + 1, h + 1);
+    setSize(w, h);
+}
+#endif
+
 void ZeroLimitAudioProcessorEditor::timerCallback()
 {
     if (isShuttingDown.load(std::memory_order_acquire)) return;
     if (! webViewLifetimeGuard.isConstructed()) return;
 
-    // 区間メーター値を取り出してリセット
-    const float inL  = audioProcessor.inPeakAccumL.exchange(0.0f, std::memory_order_acq_rel);
-    const float inR  = audioProcessor.inPeakAccumR.exchange(0.0f, std::memory_order_acq_rel);
-    const float outL = audioProcessor.outPeakAccumL.exchange(0.0f, std::memory_order_acq_rel);
-    const float outR = audioProcessor.outPeakAccumR.exchange(0.0f, std::memory_order_acq_rel);
-    const float minGainLin = audioProcessor.minGainAccum.exchange(1.0f, std::memory_order_acq_rel);
+   #if defined(JUCE_WINDOWS)
+    // 各フレームで HWND の DPI 変化をチェック（ディスプレイ間移動対応）
+    pollAndMaybeNotifyDpiChange();
+   #endif
 
-    const double inLdB  = juce::Decibels::gainToDecibels(inL,  -60.0f);
-    const double inRdB  = juce::Decibels::gainToDecibels(inR,  -60.0f);
-    const double outLdB = juce::Decibels::gainToDecibels(outL, -60.0f);
-    const double outRdB = juce::Decibels::gainToDecibels(outR, -60.0f);
+    // メーター減衰係数（30Hz タイマーで約 20 dB/sec のリリースカーブ相当）。
+    //  - Peak/RMS: 新値は processBlock が atomicMaxFloat で突き上げる。
+    //              UI タイマーは毎フレーム係数を掛けて徐々に戻す（アタック瞬時・リリース指数）。
+    //  - GR:       1.0（リダクション無し）に向かってインバース減衰する。
+    //  - Momentary は内部で 400ms スライディング窓の積算を持つため decay 不要。
+    constexpr float kPeakDecay = 0.93f;
+    constexpr float kRmsDecay  = 0.93f;
+    constexpr float kGrDecay   = 0.93f;
 
-    // GR は正値 dB（リダクション量）。minGainLin=1.0 なら 0 dB。
+    auto readAndDecayMax = [](std::atomic<float>& slot, float decay) noexcept
+    {
+        float cur = slot.load(std::memory_order_relaxed);
+        float next = cur * decay;
+        while (! slot.compare_exchange_weak(cur, next,
+                                             std::memory_order_acq_rel,
+                                             std::memory_order_relaxed))
+            next = cur * decay;
+        return cur;
+    };
+
+    auto readAndDecayTowardsOne = [](std::atomic<float>& slot, float decay) noexcept
+    {
+        float cur = slot.load(std::memory_order_relaxed);
+        float next = 1.0f - (1.0f - cur) * decay;
+        while (! slot.compare_exchange_weak(cur, next,
+                                             std::memory_order_acq_rel,
+                                             std::memory_order_relaxed))
+            next = 1.0f - (1.0f - cur) * decay;
+        return cur;
+    };
+
+    // モード選択を取得
+    int meteringMode = 0;
+    if (auto* param = audioProcessor.getState().getParameter(zl::id::METERING_MODE.getParamID()))
+    {
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*>(param))
+            meteringMode = choice->getIndex();
+    }
+
+    // どのモードでも atomic を空に近づけるため、毎フレーム Peak/RMS 両方 decay 読み取り。
+    const float inPeakL  = readAndDecayMax(audioProcessor.inPeakAccumL,  kPeakDecay);
+    const float inPeakR  = readAndDecayMax(audioProcessor.inPeakAccumR,  kPeakDecay);
+    const float outPeakL = readAndDecayMax(audioProcessor.outPeakAccumL, kPeakDecay);
+    const float outPeakR = readAndDecayMax(audioProcessor.outPeakAccumR, kPeakDecay);
+
+    const float inRmsL  = readAndDecayMax(audioProcessor.inRmsAccumL,  kRmsDecay);
+    const float inRmsR  = readAndDecayMax(audioProcessor.inRmsAccumR,  kRmsDecay);
+    const float outRmsL = readAndDecayMax(audioProcessor.outRmsAccumL, kRmsDecay);
+    const float outRmsR = readAndDecayMax(audioProcessor.outRmsAccumR, kRmsDecay);
+
+    const float minGainLin = readAndDecayTowardsOne(audioProcessor.minGainAccum, kGrDecay);
+
     const double grDb = (minGainLin >= 1.0f)
                             ? 0.0
                             : -static_cast<double>(juce::Decibels::gainToDecibels(minGainLin, -60.0f));
 
-    juce::DynamicObject::Ptr meter{ new juce::DynamicObject{} };
-
-    juce::DynamicObject::Ptr input{ new juce::DynamicObject{} };
-    input->setProperty("truePeakLeft",  inLdB);
-    input->setProperty("truePeakRight", inRdB);
-    meter->setProperty("input", input.get());
-
+    juce::DynamicObject::Ptr meter { new juce::DynamicObject{} };
+    juce::DynamicObject::Ptr input { new juce::DynamicObject{} };
     juce::DynamicObject::Ptr output{ new juce::DynamicObject{} };
-    output->setProperty("truePeakLeft",  outLdB);
-    output->setProperty("truePeakRight", outRdB);
-    meter->setProperty("output", output.get());
 
-    meter->setProperty("grDb", grDb);
+    meter->setProperty("meteringMode", meteringMode);
+
+    if (meteringMode == 2)
+    {
+        // Momentary LKFS（単一値）
+        input ->setProperty("momentary", static_cast<double>(audioProcessor.inputMomentary .getMomentaryLKFS()));
+        output->setProperty("momentary", static_cast<double>(audioProcessor.outputMomentary.getMomentaryLKFS()));
+    }
+    else if (meteringMode == 1)
+    {
+        // RMS dB
+        input ->setProperty("rmsLeft",  juce::Decibels::gainToDecibels(inRmsL,  -60.0f));
+        input ->setProperty("rmsRight", juce::Decibels::gainToDecibels(inRmsR,  -60.0f));
+        output->setProperty("rmsLeft",  juce::Decibels::gainToDecibels(outRmsL, -60.0f));
+        output->setProperty("rmsRight", juce::Decibels::gainToDecibels(outRmsR, -60.0f));
+    }
+    else
+    {
+        // Peak（True Peak 相当）dB
+        input ->setProperty("truePeakLeft",  juce::Decibels::gainToDecibels(inPeakL,  -60.0f));
+        input ->setProperty("truePeakRight", juce::Decibels::gainToDecibels(inPeakR,  -60.0f));
+        output->setProperty("truePeakLeft",  juce::Decibels::gainToDecibels(outPeakL, -60.0f));
+        output->setProperty("truePeakRight", juce::Decibels::gainToDecibels(outPeakR, -60.0f));
+    }
+
+    meter->setProperty("input",  input.get());
+    meter->setProperty("output", output.get());
+    meter->setProperty("grDb",   grDb);
 
     webView.emitEventIfBrowserIsVisible("meterUpdate", meter.get());
 }

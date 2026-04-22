@@ -70,6 +70,8 @@ target_sources(ZeroLimit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/KeyEventForwarder.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/dsp/Limiter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/dsp/Limiter.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dsp/MomentaryProcessor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dsp/MomentaryProcessor.h
 )
 
 if(APPLE)
