@@ -118,10 +118,10 @@ export const WebTransportBar: React.FC = () => {
         px: 1.5,
         py: 0.5,
         mb: 1,
-        border: '1px solid',
-        borderColor: 'divider',
-        borderRadius: 1,
-        backgroundColor: 'background.paper',
+        // プラグインカードと同じ elevation 感を出すためにドロップシャドウのみで枠取り。
+        borderRadius: 2,
+        boxShadow: 8,
+        backgroundColor: 'background.default',
       }}
     >
       <Tooltip title={isLoading ? 'Loading sample…' : (isPlaying ? 'Pause' : 'Play')}>
