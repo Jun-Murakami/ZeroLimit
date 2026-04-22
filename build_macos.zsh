@@ -391,8 +391,9 @@ fi
 if [[ ${BUILD_AAX} -eq 1 ]]; then
     echo_header "Step 3.5: PACE Eden 署名 (AAX macOS)"
 
-    # Can be overridden by environment variables. Use same wcguid as Windows script as default.
-    PACE_WCGUID_DEFAULT="5C6E4FB0-9F62-11F0-957F-005056928F3B"
+    # ZeroLimit 用の WCGUID は PACE 側で別途登録が必要。既定値は未設定。
+    # 使用時は環境変数 PACE_WCGUID に自身の GUID を設定してください。
+    PACE_WCGUID_DEFAULT=""
     PACE_WCGUID_EFFECTIVE="${PACE_WCGUID:-${PACE_WCGUID_DEFAULT}}"
 
     # Guess wraptool location (can be overridden)
@@ -420,6 +421,9 @@ if [[ ${BUILD_AAX} -eq 1 ]]; then
     if [[ -z "${FOUND_WRAPTOOL}" ]]; then
         echo -e "${color_yellow}wraptool not found. Skipping AAX PACE signing.${color_reset}"
         echo -e "${color_gray}Please set WRAPTOOL_PATH environment variable.${color_reset}"
+    elif [[ -z "${PACE_WCGUID_EFFECTIVE}" ]]; then
+        echo -e "${color_yellow}PACE_WCGUID not set. Skipping AAX PACE signing.${color_reset}"
+        echo -e "${color_gray}Set the PACE_WCGUID environment variable to your plugin's WCGUID registered with PACE.${color_reset}"
     else
         echo_step "Using wraptool to apply iLok signing to AAX..."
 
