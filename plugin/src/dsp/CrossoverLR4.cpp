@@ -3,14 +3,15 @@
 
 namespace zl::dsp {
 
-void CrossoverLR4::prepare(double sr, int channelsIn)
+void CrossoverLR4::prepare(double sr, int channelsIn, int maximumBlockSize)
 {
     sampleRate  = sr > 0.0 ? sr : 44100.0;
     numChannels = std::min(kMaxChannels, std::max(1, channelsIn));
+    preparedBlockSize = std::max(1, maximumBlockSize);
 
     juce::dsp::ProcessSpec spec{};
     spec.sampleRate       = sampleRate;
-    spec.maximumBlockSize = 1;
+    spec.maximumBlockSize = static_cast<juce::uint32>(preparedBlockSize);
     spec.numChannels      = 1;
 
     for (auto& p : splitPairs) p.prepare(spec);
@@ -19,6 +20,20 @@ void CrossoverLR4::prepare(double sr, int channelsIn)
 
     updateCoefficients();
     assignCoefficientsToAllPairs();
+
+    auto prepareBuffer = [this](juce::AudioBuffer<float>& b)
+    {
+        b.setSize(numChannels,
+                  preparedBlockSize,
+                  /*keepExistingContent*/ false,
+                  /*clearExtraSpace*/     true,
+                  /*avoidReallocating*/   false);
+    };
+    prepareBuffer(restBuf);
+    prepareBuffer(bandRawBuf);
+    prepareBuffer(tmpA);
+    prepareBuffer(tmpB);
+
     reset();
 }
 
@@ -35,15 +50,25 @@ void CrossoverLR4::configure(int numBands, const float* crossovers)
     currentBandCount = n;
 
     const float nyq   = static_cast<float>(sampleRate) * 0.5f;
-    const float safeU = nyq * 0.95f;
+    const float safeU = std::max(0.001f, nyq * 0.95f);
 
-    // 昇順に clamp しながら格納（最低 10 Hz の間隔を確保）
-    float prev = 10.0f;
+    // 昇順に clamp しながら格納。低サンプルレートで safeU が狭い場合は間隔を縮める。
+    const int numCrossovers = n - 1;
+    const float baseMin = std::min(10.0f, safeU);
+    const float available = std::max(0.0f, safeU - baseMin);
+    const float minSpacing = numCrossovers > 1
+                               ? std::min(10.0f, available / static_cast<float>(numCrossovers - 1))
+                               : 0.0f;
+    float prev = baseMin;
     for (int i = 0; i < n - 1; ++i)
     {
-        float v = std::clamp(crossovers[i], prev, safeU);
+        const float remaining = static_cast<float>(numCrossovers - 1 - i);
+        const float upper = safeU - remaining * minSpacing;
+        const float lower = (i == 0) ? std::min(baseMin, upper)
+                                     : std::min(prev + minSpacing, upper);
+        float v = std::max(lower, std::min(crossovers[i], upper));
         crossoverFreqs[i] = v;
-        prev = v + 10.0f;
+        prev = v;
     }
     // 未使用スロットはクリア（安全のため、最後の値を踏襲）
     for (int i = n - 1; i < kMaxCrossovers; ++i)
@@ -57,7 +82,10 @@ void CrossoverLR4::updateCoefficients()
 {
     for (int i = 0; i < kMaxCrossovers; ++i)
     {
-        const float f = std::max(10.0f, crossoverFreqs[i]);
+        const float nyq = static_cast<float>(sampleRate) * 0.5f;
+        const float upper = std::max(0.001f, nyq * 0.95f);
+        const float lower = std::min(10.0f, upper);
+        const float f = std::max(lower, std::min(crossoverFreqs[i], upper));
         lpCoefs[i] = Coefs::makeLowPass (sampleRate, f, kButterQ);
         hpCoefs[i] = Coefs::makeHighPass(sampleRate, f, kButterQ);
     }
@@ -97,7 +125,7 @@ void CrossoverLR4::processBlock(const juce::AudioBuffer<float>& input,
 
     auto ensure = [&](juce::AudioBuffer<float>& b)
     {
-        if (b.getNumChannels() != channels || b.getNumSamples() < n)
+        if (b.getNumChannels() != channels || b.getNumSamples() != n)
             b.setSize(channels, n, false, false, true);
     };
     ensure(restBuf);

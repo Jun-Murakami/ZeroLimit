@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "ParameterIDs.h"
+#include "KeyEventForwarder.h"
 #include "Version.h"
 
 #include <unordered_map>
@@ -359,6 +360,12 @@ void ZeroLimitAudioProcessorEditor::handleSystemAction(const juce::Array<juce::v
             init->setProperty("pluginName", "ZeroLimit");
             init->setProperty("version", ZEROLIMIT_VERSION_STRING);
             completion(juce::var{ init.get() });
+            return;
+        }
+        if (action == "forward_key_event" && args.size() >= 2)
+        {
+            const bool forwarded = zl::KeyEventForwarder::forwardKeyEventToHost(args[1], this);
+            completion(juce::var{ forwarded });
             return;
         }
     }

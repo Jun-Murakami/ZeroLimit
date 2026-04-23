@@ -4,6 +4,13 @@
 
 namespace zl::dsp {
 
+namespace {
+    inline float sanitizeFinite(float value) noexcept
+    {
+        return std::isfinite(value) ? value : 0.0f;
+    }
+}
+
 void ZeroLatencyLimiter::prepare(double sampleRate, int /*numChannels*/)
 {
     currentSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
@@ -49,6 +56,9 @@ void ZeroLatencyLimiter::updateReleaseCoeffs()
 
 float ZeroLatencyLimiter::processSample(float& sampleL, float& sampleR) noexcept
 {
+    sampleL = sanitizeFinite(sampleL);
+    sampleR = sanitizeFinite(sampleR);
+
     const float absMax = std::max(std::abs(sampleL), std::abs(sampleR));
 
     // 目標ゲイン: |x| が threshold を超えるときのみ threshold/|x| に落とす
@@ -87,6 +97,7 @@ float ZeroLatencyLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcep
         auto* ch = buffer.getWritePointer(0);
         for (int i = 0; i < numSamples; ++i)
         {
+            ch[i] = sanitizeFinite(ch[i]);
             const float a = std::abs(ch[i]);
             float targetGain = 1.0f;
             if (a > thresholdLin && a > 0.0f)
@@ -111,6 +122,9 @@ float ZeroLatencyLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcep
 
     for (int i = 0; i < numSamples; ++i)
     {
+        left[i]  = sanitizeFinite(left[i]);
+        right[i] = sanitizeFinite(right[i]);
+
         const float a = std::max(std::abs(left[i]), std::abs(right[i]));
 
         float targetGain = 1.0f;
@@ -129,7 +143,10 @@ float ZeroLatencyLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcep
         right[i] *= applied;
 
         for (int ch = 2; ch < numChannels; ++ch)
-            buffer.getWritePointer(ch)[i] *= applied;
+        {
+            auto* extra = buffer.getWritePointer(ch);
+            extra[i] = sanitizeFinite(extra[i]) * applied;
+        }
 
         if (applied < minGainObserved) minGainObserved = applied;
     }

@@ -57,7 +57,12 @@ void MultibandLimiter::prepare(double sampleRate, int numChannelsIn, int maxBloc
     preparedChannels = std::max(1, numChannelsIn);
     preparedBlock    = std::max(1, maxBlockSize);
 
-    crossover.prepare(sampleRate, preparedChannels);
+    for (auto& crossover : crossovers)
+        crossover.prepare(sampleRate, preparedChannels, preparedBlock);
+
+    crossovers[static_cast<int>(Mode::Band3)].configure(3, kCrossovers3);
+    crossovers[static_cast<int>(Mode::Band4)].configure(4, kCrossovers4);
+    crossovers[static_cast<int>(Mode::Band5)].configure(5, kCrossovers5);
 
     for (auto& limiter : bandLimiters)
         limiter.prepare(sampleRate, preparedChannels);
@@ -71,7 +76,8 @@ void MultibandLimiter::prepare(double sampleRate, int numChannelsIn, int maxBloc
 
 void MultibandLimiter::reset()
 {
-    crossover.reset();
+    for (auto& crossover : crossovers)
+        crossover.reset();
     for (auto& limiter : bandLimiters)
         limiter.reset();
 }
@@ -89,7 +95,7 @@ void MultibandLimiter::setMode(Mode mode)
     currentMode = mode;
     configureForMode(mode);
     // バンド再構成で切替前の内部状態はリセットしておく（ちらつき回避）
-    crossover.reset();
+    getActiveCrossover().reset();
     for (auto& limiter : bandLimiters)
         limiter.reset();
 }
@@ -99,18 +105,20 @@ void MultibandLimiter::configureForMode(Mode mode)
     switch (mode)
     {
         case Mode::Band3:
-            crossover.configure(3, kCrossovers3);
             for (int i = 0; i < 3; ++i) applyBandSpec(bandLimiters[i], kBands3[i]);
             break;
         case Mode::Band4:
-            crossover.configure(4, kCrossovers4);
             for (int i = 0; i < 4; ++i) applyBandSpec(bandLimiters[i], kBands4[i]);
             break;
         case Mode::Band5:
-            crossover.configure(5, kCrossovers5);
             for (int i = 0; i < 5; ++i) applyBandSpec(bandLimiters[i], kBands5[i]);
             break;
     }
+}
+
+CrossoverLR4& MultibandLimiter::getActiveCrossover() noexcept
+{
+    return crossovers[static_cast<int>(currentMode)];
 }
 
 float MultibandLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcept
@@ -122,8 +130,14 @@ float MultibandLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcept
 
     const int N = getNumBands();
 
+    for (int i = 0; i < N; ++i)
+    {
+        if (bandBufs[i].getNumChannels() != channels || bandBufs[i].getNumSamples() != n)
+            bandBufs[i].setSize(channels, n, false, false, true);
+    }
+
     // バンド分解
-    crossover.processBlock(buffer, bandBufs);
+    getActiveCrossover().processBlock(buffer, bandBufs);
 
     // バンドごとに独立リミット、最小ゲインを集計
     float minGain = 1.0f;

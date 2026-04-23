@@ -27,6 +27,19 @@ namespace {
                                            std::memory_order_relaxed))
         { /* retry */ }
     }
+
+    inline void sanitizeBufferFinite(juce::AudioBuffer<float>& buffer, int numChannels, int numSamples) noexcept
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            auto* data = buffer.getWritePointer(ch);
+            for (int i = 0; i < numSamples; ++i)
+            {
+                if (! std::isfinite(data[i]))
+                    data[i] = 0.0f;
+            }
+        }
+    }
 }
 
 ZeroLimitAudioProcessor::ZeroLimitAudioProcessor()
@@ -187,6 +200,8 @@ void ZeroLimitAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
 
     if (numSamples <= 0 || numChannels <= 0)
         return;
+
+    sanitizeBufferFinite(buffer, numChannels, numSamples);
 
     // パラメータ取得
     const float thresholdDb = parameters.getRawParameterValue(zl::id::THRESHOLD.getParamID())->load();

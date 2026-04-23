@@ -58,7 +58,7 @@ public:
     float processBlock(juce::AudioBuffer<float>& buffer) noexcept;
 
 private:
-    CrossoverLR4 crossover;
+    std::array<CrossoverLR4, 3> crossovers;
     std::array<ZeroLatencyLimiter, kMaxBands> bandLimiters;
     std::array<juce::AudioBuffer<float>, kMaxBands> bandBufs;
 
@@ -68,6 +68,7 @@ private:
     Mode  currentMode        = Mode::Band3;
 
     void configureForMode(Mode mode);
+    CrossoverLR4& getActiveCrossover() noexcept;
 };
 
 } // namespace zl::dsp

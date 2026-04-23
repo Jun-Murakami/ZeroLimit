@@ -32,7 +32,7 @@ public:
     static constexpr int kMaxCrossovers = kMaxBands - 1; // 4
     static constexpr int kMaxChannels   = 2;
 
-    void prepare(double sampleRate, int numChannels);
+    void prepare(double sampleRate, int numChannels, int maximumBlockSize);
     void reset();
 
     // バンド数と crossover 周波数を設定。numBands は [3, kMaxBands]、
@@ -125,6 +125,7 @@ private:
 
     double sampleRate  = 44100.0;
     int    numChannels = 2;
+    int    preparedBlockSize = 1;
     int    currentBandCount = 3;
     std::array<float, kMaxCrossovers> crossoverFreqs{ 120.0f, 5000.0f, 0.0f, 0.0f };
 
