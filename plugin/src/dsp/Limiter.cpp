@@ -81,7 +81,7 @@ float ZeroLatencyLimiter::processSample(float& sampleL, float& sampleR) noexcept
     return applied;
 }
 
-float ZeroLatencyLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcept
+float ZeroLatencyLimiter::processBlock(juce::AudioBuffer<float>& buffer, float* gainOut) noexcept
 {
     const int numChannels = buffer.getNumChannels();
     const int numSamples  = buffer.getNumSamples();
@@ -112,6 +112,7 @@ float ZeroLatencyLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcep
             const float applied = arc ? std::min(currentGain, currentGainSlow) : currentGain;
 
             ch[i] *= applied;
+            if (gainOut) gainOut[i] = applied;
             if (applied < minGainObserved) minGainObserved = applied;
         }
         return minGainObserved;
@@ -148,6 +149,7 @@ float ZeroLatencyLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcep
             extra[i] = sanitizeFinite(extra[i]) * applied;
         }
 
+        if (gainOut) gainOut[i] = applied;
         if (applied < minGainObserved) minGainObserved = applied;
     }
     return minGainObserved;

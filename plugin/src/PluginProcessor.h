@@ -4,6 +4,7 @@
 #include <juce_core/juce_core.h>
 #include <juce_dsp/juce_dsp.h>
 #include <atomic>
+#include <vector>
 
 #include "ParameterIDs.h"
 #include "dsp/Limiter.h"
@@ -72,6 +73,29 @@ public:
     zl::dsp::MomentaryProcessor inputMomentary;
     zl::dsp::MomentaryProcessor outputMomentary;
 
+    // ================= Waveform display (Pro-L 風のオシロ表示) =================
+    //  - 入力側の |L|,|R| マージ済みサンプルを "slice" 単位（約 200 Hz）でダウンサンプル。
+    //  - slice ごとの値:
+    //      peak      : slice 内の max(|L|,|R|) のリニア振幅
+    //      minGain   : slice をまたぐブロックで適用された min gain（= 最大リダクション）
+    //  - AbstractFifo + 固定長リングで、audio → UI へ wait-free に受け渡し。
+    //  - 5 秒表示でも余裕を持つため 2048 slot 用意（200Hz × ~10s）。
+    static constexpr int kWaveformFifoSize   = 2048;
+    static constexpr double kWaveformSliceHz = 200.0;
+    juce::AbstractFifo waveformFifo{ kWaveformFifoSize };
+    std::vector<float> waveformPeakBuffer;      // size = kWaveformFifoSize
+    std::vector<float> waveformMinGainBuffer;   // size = kWaveformFifoSize
+    int   waveformSliceSize         = 220;      // = sampleRate / 200 で prepare 時に設定
+    int   waveformSliceSampleCount  = 0;        // audio thread のみが書く
+    float waveformSlicePeakAccum    = 0.0f;     // audio thread のみ
+    float waveformSliceMinGainAccum = 1.0f;     // audio thread のみ
+
+    // UI から現在のサンプリングレートを取得する用（slice レートの再計算不要のため emit だけ）
+    std::atomic<float> waveformSliceHz{ static_cast<float>(kWaveformSliceHz) };
+
+    // audio thread から呼ばれる：1 サンプルぶんの入力ピーク/ゲインを slice に積む
+    void pushWaveformSample(float absPeakSample, float blockMinGainLin) noexcept;
+
 private:
     juce::AudioProcessorValueTreeState parameters;
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -85,6 +109,13 @@ private:
     // processBlock で入力信号を保持するための作業用バッファ
     //  - 出力段リミッタが in-place で書き換えるため、入力側メータ/Momentary 用に複製を取る
     juce::AudioBuffer<float> inputCopyBuffer;
+
+    // 波形表示用 per-sample gain スクラッチ:
+    //  - waveformGainScratchA: limiter / multibandLimiter からの per-sample gain
+    //  - waveformGainScratchB: safety limiter の per-sample gain（multi モード時のみ使用）
+    //  - prepare 時に maxBlockSize で確保、processBlock では追加 alloc しない
+    std::vector<float> waveformGainScratchA;
+    std::vector<float> waveformGainScratchB;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ZeroLimitAudioProcessor)
 };

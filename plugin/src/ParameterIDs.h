@@ -13,6 +13,7 @@ namespace zl::id {
     // - MODE: Single / Multi バンドモード切替（0=Single, 1=Multi、既定 Single）
     //         Multi 時は AUTO_RELEASE を強制 ON として扱い、手動 RELEASE_MS は無視される。
     // - BAND_COUNT: Multi モード時のバンド数（0=3 band, 1=4 band, 2=5 band、既定 4 band）
+    // - DISPLAY_MODE: 中央表示のモード（0=Metering / 1=Waveform、既定 Metering）
     const juce::ParameterID THRESHOLD{"THRESHOLD", 1};
     const juce::ParameterID OUTPUT_GAIN{"OUTPUT_GAIN", 1};
     const juce::ParameterID METERING_MODE{"METERING_MODE", 1};
@@ -21,4 +22,5 @@ namespace zl::id {
     const juce::ParameterID LINK{"LINK", 1};
     const juce::ParameterID MODE{"MODE", 1};
     const juce::ParameterID BAND_COUNT{"BAND_COUNT", 1};
+    const juce::ParameterID DISPLAY_MODE{"DISPLAY_MODE", 1};
 }  // namespace zl::id

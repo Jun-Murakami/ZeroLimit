@@ -118,4 +118,20 @@ WASM_EXPORT void dsp_reset_momentary()
     if (g_engine) g_engine->resetMomentaryHold();
 }
 
+// ---------- 波形表示（Pro-L 風オシロ） ----------
+
+// 最大 maxN slice ぶんを peaks[] と grDb[] に書き込み、実際の slice 数を返す。
+//  peaks: slice 内の max(|L|,|R|) のリニア振幅（pre-limiter）
+//  grDb : slice をまたぐブロック内の最大 GR（dB, >= 0）
+WASM_EXPORT int dsp_get_waveform_slices(float* peaks, float* grDb, int maxN)
+{
+    if (!g_engine) return 0;
+    return g_engine->getWaveformSlices(peaks, grDb, maxN);
+}
+
+WASM_EXPORT double dsp_get_waveform_slice_hz()
+{
+    return g_engine ? g_engine->getWaveformSliceHz() : 0.0;
+}
+
 } // extern "C"

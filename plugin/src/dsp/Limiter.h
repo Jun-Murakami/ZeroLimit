@@ -36,7 +36,9 @@ public:
     // ブロック処理版（N チャネル対応）
     // - 各サンプルで全チャネル連動のゲインリダクションを計算・適用
     // - 区間中の最大リダクション（リニア, 0..1）を返す
-    float processBlock(juce::AudioBuffer<float>& buffer) noexcept;
+    // - gainOut != nullptr なら各サンプルで適用された gain（リニア, 0..1）を書き出す。
+    //   配列長は最低でも `buffer.getNumSamples()` 必要。
+    float processBlock(juce::AudioBuffer<float>& buffer, float* gainOut = nullptr) noexcept;
 
 private:
     float thresholdLin = 1.0f;  // リニア振幅（0..1）。0dBFS = 1.0

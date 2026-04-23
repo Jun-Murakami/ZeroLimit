@@ -184,6 +184,7 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
       webMeteringModeRelay { zl::id::METERING_MODE.getParamID() },
       webModeRelay         { zl::id::MODE.getParamID() },
       webBandCountRelay    { zl::id::BAND_COUNT.getParamID() },
+      webDisplayModeRelay  { zl::id::DISPLAY_MODE.getParamID() },
       thresholdAttachment    { *p.getState().getParameter(zl::id::THRESHOLD.getParamID()),     webThresholdRelay,    nullptr },
       outputGainAttachment   { *p.getState().getParameter(zl::id::OUTPUT_GAIN.getParamID()),   webOutputGainRelay,   nullptr },
       releaseMsAttachment    { *p.getState().getParameter(zl::id::RELEASE_MS.getParamID()),    webReleaseMsRelay,    nullptr },
@@ -192,6 +193,7 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
       meteringModeAttachment { *p.getState().getParameter(zl::id::METERING_MODE.getParamID()), webMeteringModeRelay, nullptr },
       modeAttachment         { *p.getState().getParameter(zl::id::MODE.getParamID()),          webModeRelay,         nullptr },
       bandCountAttachment    { *p.getState().getParameter(zl::id::BAND_COUNT.getParamID()),    webBandCountRelay,    nullptr },
+      displayModeAttachment  { *p.getState().getParameter(zl::id::DISPLAY_MODE.getParamID()),  webDisplayModeRelay,  nullptr },
       webView{
           // ProTools Windows 等、DPI 非対応ホストで WebView2 の自動スケーリングを抑止する
           makeWebViewOptionsWithPreLaunchArgs(p)
@@ -215,6 +217,7 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
               .withOptionsFrom(webMeteringModeRelay)
               .withOptionsFrom(webModeRelay)
               .withOptionsFrom(webBandCountRelay)
+              .withOptionsFrom(webDisplayModeRelay)
               .withNativeFunction(
                   juce::Identifier{"system_action"},
                   [this](const juce::Array<juce::var>& args,
@@ -274,8 +277,8 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
 
     addAndMakeVisible(webView);
 
-    // 初期サイズ
-    setSize(470, 470);
+    // 初期サイズ（最小幅 kMinWidth=447 に合わせて 453×470）
+    setSize(453, 470);
 
     // リサイズ可能に（プラグイン/スタンドアロン共通）
     //  - OS ウィンドウ四辺 / ResizableCornerComponent / WebUI オーバーレイ
@@ -510,4 +513,46 @@ void ZeroLimitAudioProcessorEditor::timerCallback()
     meter->setProperty("grDb",   grDb);
 
     webView.emitEventIfBrowserIsVisible("meterUpdate", meter.get());
+
+    // ---- Waveform display: FIFO からドレイン、変化があればまとめて emit ----
+    //  audio thread が 200 Hz で slice 値を貯めている。30 Hz タイマーなら毎フレーム 6-7 slice 受け取る想定。
+    {
+        auto& fifo = audioProcessor.waveformFifo;
+        const int available = fifo.getNumReady();
+        if (available > 0)
+        {
+            int start1 = 0, size1 = 0, start2 = 0, size2 = 0;
+            fifo.prepareToRead(available, start1, size1, start2, size2);
+
+            juce::Array<juce::var> peaks;
+            juce::Array<juce::var> grDbs;
+            peaks.ensureStorageAllocated(available);
+            grDbs.ensureStorageAllocated(available);
+
+            auto push = [&peaks, &grDbs, this](int start, int size)
+            {
+                for (int i = 0; i < size; ++i)
+                {
+                    const int idx = start + i;
+                    const float peak = audioProcessor.waveformPeakBuffer   [static_cast<size_t>(idx)];
+                    const float gLin = audioProcessor.waveformMinGainBuffer[static_cast<size_t>(idx)];
+                    peaks.add(juce::var{ static_cast<double>(peak) });
+                    // dB 換算して送る（JS 側で log 計算省略。負値は 0 にクランプ済み）
+                    const double grDbLocal = (gLin >= 1.0f)
+                                                 ? 0.0
+                                                 : -static_cast<double>(juce::Decibels::gainToDecibels(gLin, -60.0f));
+                    grDbs.add(juce::var{ grDbLocal });
+                }
+            };
+            push(start1, size1);
+            push(start2, size2);
+            fifo.finishedRead(size1 + size2);
+
+            juce::DynamicObject::Ptr wf { new juce::DynamicObject{} };
+            wf->setProperty("sliceHz", static_cast<double>(audioProcessor.waveformSliceHz.load(std::memory_order_relaxed)));
+            wf->setProperty("peaks", peaks);
+            wf->setProperty("grDb",  grDbs);
+            webView.emitEventIfBrowserIsVisible("waveformUpdate", wf.get());
+        }
+    }
 }

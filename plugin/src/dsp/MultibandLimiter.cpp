@@ -70,6 +70,9 @@ void MultibandLimiter::prepare(double sampleRate, int numChannelsIn, int maxBloc
     for (auto& b : bandBufs)
         b.setSize(preparedChannels, preparedBlock, false, false, true);
 
+    // per-sample gain 集計用スクラッチ（バンド限定器から受け取るサイズ）
+    bandGainScratch.assign(static_cast<size_t>(preparedBlock), 1.0f);
+
     // 初期モード反映（既定は Band3）
     configureForMode(currentMode);
 }
@@ -121,7 +124,7 @@ CrossoverLR4& MultibandLimiter::getActiveCrossover() noexcept
     return crossovers[static_cast<int>(currentMode)];
 }
 
-float MultibandLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcept
+float MultibandLimiter::processBlock(juce::AudioBuffer<float>& buffer, float* gainOut) noexcept
 {
     const int channels = buffer.getNumChannels();
     const int n        = buffer.getNumSamples();
@@ -136,6 +139,16 @@ float MultibandLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcept
             bandBufs[i].setSize(channels, n, false, false, true);
     }
 
+    // スクラッチバッファサイズ確認（prepare 時の maxBlockSize を上回るケースへの保険）
+    if (gainOut && static_cast<int>(bandGainScratch.size()) < n)
+        bandGainScratch.resize(static_cast<size_t>(n), 1.0f);
+
+    // gainOut を 1.0 で初期化
+    if (gainOut)
+    {
+        for (int i = 0; i < n; ++i) gainOut[i] = 1.0f;
+    }
+
     // バンド分解
     getActiveCrossover().processBlock(buffer, bandBufs);
 
@@ -143,8 +156,15 @@ float MultibandLimiter::processBlock(juce::AudioBuffer<float>& buffer) noexcept
     float minGain = 1.0f;
     for (int i = 0; i < N; ++i)
     {
-        const float g = bandLimiters[i].processBlock(bandBufs[i]);
+        float* perSampleOut = gainOut ? bandGainScratch.data() : nullptr;
+        const float g = bandLimiters[i].processBlock(bandBufs[i], perSampleOut);
         if (g < minGain) minGain = g;
+        // gainOut にバンド間の最小 gain を合成
+        if (gainOut)
+        {
+            for (int s = 0; s < n; ++s)
+                if (perSampleOut[s] < gainOut[s]) gainOut[s] = perSampleOut[s];
+        }
     }
 
     // サム（in-place で buffer に書き戻す）

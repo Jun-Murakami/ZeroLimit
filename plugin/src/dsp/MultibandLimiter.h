@@ -2,6 +2,7 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <array>
+#include <vector>
 
 #include "CrossoverLR4.h"
 #include "Limiter.h"
@@ -55,12 +56,19 @@ public:
 
     // in-place 処理。戻り値は区間中に観測された最小ゲイン（= 最大リダクション, 0..1）。
     // バンド間の最小値（= 最もリダクションが深かったバンドの値）を返す。
-    float processBlock(juce::AudioBuffer<float>& buffer) noexcept;
+    //
+    // gainOut != nullptr なら、各サンプルで観測された「バンド間最小 gain」（リニア 0..1）を書き出す。
+    //  バンドはサムされるので output/input 比は位相シフトとバンド和で意味を成さないが、
+    //  min-across-bands は視覚的に「最も深く削られたバンドがどれだけ削ったか」を示す妥当な指標。
+    //  配列長は最低でも `buffer.getNumSamples()` 必要。
+    float processBlock(juce::AudioBuffer<float>& buffer, float* gainOut = nullptr) noexcept;
 
 private:
     std::array<CrossoverLR4, 3> crossovers;
     std::array<ZeroLatencyLimiter, kMaxBands> bandLimiters;
     std::array<juce::AudioBuffer<float>, kMaxBands> bandBufs;
+    // per-sample gain 集計用スクラッチ（bandLimiter から受け取って min 合成）
+    std::vector<float> bandGainScratch;
 
     int   preparedChannels  = 2;
     int   preparedBlock     = 0;

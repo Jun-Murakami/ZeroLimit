@@ -11,7 +11,7 @@ class ZeroLimitAudioProcessorEditor : public juce::AudioProcessorEditor,
 public:
     // ウィンドウの最小・最大サイズ。全てのリサイズ経路（OS 四辺・内蔵リサイザ・
     // WebUI オーバーレイ）で同じ値を使う。
-    static constexpr int kMinWidth  = 410;
+    static constexpr int kMinWidth  = 447;
     static constexpr int kMinHeight = 390;
     static constexpr int kMaxWidth  = 2560;
     static constexpr int kMaxHeight = 1440;
@@ -44,6 +44,7 @@ private:
     juce::WebComboBoxRelay     webMeteringModeRelay;
     juce::WebComboBoxRelay     webModeRelay;       // Single / Multi band mode
     juce::WebComboBoxRelay     webBandCountRelay;  // 3 / 4 / 5 band count (Multi only)
+    juce::WebComboBoxRelay     webDisplayModeRelay; // Metering / Waveform
 
     // APVTS ←→ Web バインディング
     juce::WebSliderParameterAttachment       thresholdAttachment;
@@ -54,6 +55,7 @@ private:
     juce::WebComboBoxParameterAttachment     meteringModeAttachment;
     juce::WebComboBoxParameterAttachment     modeAttachment;
     juce::WebComboBoxParameterAttachment     bandCountAttachment;
+    juce::WebComboBoxParameterAttachment     displayModeAttachment;
 
     juce::WebControlParameterIndexReceiver controlParameterIndexReceiver;
 

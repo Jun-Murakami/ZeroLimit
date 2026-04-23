@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, Input, Slider, Typography } from '@mui/material';
 import { darken, lighten, styled } from '@mui/material/styles';
 import { useJuceSliderValue } from '../hooks/useJuceParam';
+import { useFineAdjustPointer } from '../hooks/useFineAdjustPointer';
+import { useNumberInputAdjust } from '../hooks/useNumberInputAdjust';
 
 interface ParameterFaderProps {
   /** JUCE パラメータID（例: 'THRESHOLD', 'OUTPUT_GAIN'） */
@@ -175,21 +177,31 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
     if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
   };
 
-  // Ctrl/Cmd + クリックで defaultValue へリセット。
-  //  MUI Slider の内部 pointerdown ハンドラは同じ要素に直接登録されているので、
-  //  onMouseDown/onPointerDown（バブル相）で stopPropagation しても止まらない。
-  //  キャプチャ相（親要素で祖先→子孫の順に発火）で先取りし、
-  //  React 合成イベントとネイティブイベントの両方の伝播を止めることで
-  //  MUI が pointerdown を受け取る前に処理を完結させる。
-  const handlePointerDownCapture = (e: React.PointerEvent): void => {
-    if ((e.ctrlKey || e.metaKey) && defaultValue !== undefined)
-    {
-      e.preventDefault();
-      e.stopPropagation();
-      e.nativeEvent.stopImmediatePropagation();
-      applyValue(defaultValue);
-    }
-  };
+  // 修飾キー + ポインタ操作：
+  //  Ctrl/Cmd + クリック（移動なし） → defaultValue にリセット
+  //  (Ctrl/Cmd/Shift) + ドラッグ      → 微調整モード（1px = wheelStepFine）
+  //  修飾キーなし                     → MUI Slider に委譲
+  //
+  // MUI Slider の内部 pointerdown は直接登録されているので、capture 相 +
+  // stopImmediatePropagation で先取りしないと MUI に食われる。
+  const fineDragStartValueRef = useRef<number>(0);
+  const handlePointerDownCapture = useFineAdjustPointer({
+    orientation: 'vertical',
+    onReset: () => {
+      if (defaultValue !== undefined) applyValue(defaultValue);
+    },
+    onDragStart: () => {
+      fineDragStartValueRef.current = valueRef.current;
+      sliderState?.sliderDragStarted();
+    },
+    onDragDelta: (deltaPx) => {
+      // 1px = wheelStepFine（dB 系なら 0.1 dB/px）。粗すぎず細かすぎずの定番。
+      applyValue(fineDragStartValueRef.current + deltaPx * wheelStepFine);
+    },
+    onDragEnd: () => {
+      sliderState?.sliderDragEnded();
+    },
+  });
 
   // ホイール（非パッシブ）
   const wheelRef = useRef<HTMLDivElement | null>(null);
@@ -199,7 +211,8 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const direction = -event.deltaY > 0 ? 1 : -1;
-      const step = event.shiftKey ? wheelStepFine : wheelStep;
+      const fine = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey;
+      const step = fine ? wheelStepFine : wheelStep;
       applyValue(valueRef.current + step * direction);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
@@ -208,6 +221,28 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [min, max, wheelStep, wheelStepFine]);
+
+  // 数値入力欄のホイール / 縦ドラッグ
+  const inputElRef = useRef<HTMLInputElement | null>(null);
+  const inputDragStartValueRef = useRef<number>(0);
+  useNumberInputAdjust(inputElRef, {
+    onWheelStep: (direction, fine) => {
+      const step = fine ? wheelStepFine : wheelStep;
+      applyValue(valueRef.current + step * direction);
+    },
+    onDragStart: () => {
+      inputDragStartValueRef.current = valueRef.current;
+      sliderState?.sliderDragStarted();
+    },
+    onDragDelta: (deltaY, fine) => {
+      const step = fine ? wheelStepFine : wheelStep;
+      // 1px = 1 step。通常ドラッグで 1px=1dB、fine で 1px=0.1dB。
+      applyValue(inputDragStartValueRef.current + deltaY * step);
+    },
+    onDragEnd: () => {
+      sliderState?.sliderDragEnded();
+    },
+  });
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 60, position: 'relative' }}>
@@ -231,7 +266,7 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
         </Typography>
       </Box>
 
-      <Box sx={{ display: 'flex', height: SLIDER_HEIGHT, width: '100%', justifyContent: 'center', mb: '14px' }}>
+      <Box sx={{ display: 'flex', height: SLIDER_HEIGHT, width: '100%', justifyContent: 'center', mb: '7px' }}>
         <Box
           sx={{ position: 'relative', display: 'flex', alignItems: 'center' }}
           ref={wheelRef}
@@ -298,17 +333,18 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
         </Box>
       </Box>
 
-      {/* mt: '10px' — フェーダー側入力ボックスの上端を、メーター側モード切替ボタンの
-          上端とほぼ同じ Y に合わせるための余白（slider の mb 14px 分だけでは足りない差分）。 */}
+      {/* mt: '5px' — フェーダー側入力ボックスの上端を、メーター側モード切替ボタンの
+          上端とほぼ同じ Y に合わせるための余白（slider の mb 7px 分だけでは足りない差分）。 */}
       <StyledInput
         className='block-host-shortcuts'
+        inputRef={inputElRef}
         value={displayInput}
         onChange={handleInputChange}
         onFocus={handleInputFocus}
         onBlur={commitInput}
         onKeyDown={handleInputKeyDown}
         disableUnderline
-        sx={{ mt: '10px' }}
+        sx={{ mt: '5px' }}
       />
     </Box>
   );

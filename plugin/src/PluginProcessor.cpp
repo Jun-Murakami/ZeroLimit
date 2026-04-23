@@ -52,6 +52,34 @@ ZeroLimitAudioProcessor::ZeroLimitAudioProcessor()
 
 ZeroLimitAudioProcessor::~ZeroLimitAudioProcessor() = default;
 
+void ZeroLimitAudioProcessor::pushWaveformSample(float absPeakSample, float blockMinGainLin) noexcept
+{
+    // 1 slice 内の最大入力ピークと最小ゲインを累積。
+    //  slice が完了したら FIFO に 1 スロット書き込む（リングが満杯でも 1 古い値を上書きする形）。
+    if (absPeakSample > waveformSlicePeakAccum)
+        waveformSlicePeakAccum = absPeakSample;
+    if (blockMinGainLin < waveformSliceMinGainAccum)
+        waveformSliceMinGainAccum = blockMinGainLin;
+
+    if (++waveformSliceSampleCount >= waveformSliceSize)
+    {
+        // SPSC: 満杯のときは "最新の 1 slice を黙って捨てる"（消費側の read index を
+        //  触らないことで read/write の race を避ける）。UI タイマーは 30Hz で最大数十 slice
+        //  しか消費しないので、2048 スロットのリングなら現実には満杯にはならない。
+        int start1 = 0, size1 = 0, start2 = 0, size2 = 0;
+        waveformFifo.prepareToWrite(1, start1, size1, start2, size2);
+        if (size1 > 0)
+        {
+            waveformPeakBuffer   [static_cast<size_t>(start1)] = waveformSlicePeakAccum;
+            waveformMinGainBuffer[static_cast<size_t>(start1)] = waveformSliceMinGainAccum;
+            waveformFifo.finishedWrite(1);
+        }
+        waveformSliceSampleCount  = 0;
+        waveformSlicePeakAccum    = 0.0f;
+        waveformSliceMinGainAccum = 1.0f;
+    }
+}
+
 juce::AudioProcessorValueTreeState::ParameterLayout ZeroLimitAudioProcessor::createParameterLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
@@ -121,6 +149,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout ZeroLimitAudioProcessor::cre
         juce::StringArray{ "Single", "Multi" },
         1));
 
+    // DISPLAY_MODE: 中央表示のモード（Metering=通常のメーター群 / Waveform=Pro-L 風の波形表示）。
+    //  純粋に UI の表示切替で DSP には影響しないが、プリセットや再起動後の状態復帰を
+    //  自然に扱うため APVTS で持つ（METERING_MODE と同様）。
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        zl::id::DISPLAY_MODE,
+        "Display Mode",
+        juce::StringArray{ "Metering", "Waveform" },
+        0));
+
     // BAND_COUNT: Multi モードのバンド数。
     //  3-band: 120 Hz / 5 kHz             （放送、声を Mid に閉じ込め）← 既定
     //  4-band: 150 Hz / 5 kHz / 15 kHz    （Steinberg 準拠）
@@ -170,6 +207,32 @@ void ZeroLimitAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
                             /*keepExistingContent*/ false,
                             /*clearExtraSpace*/     true,
                             /*avoidReallocating*/   false);
+
+    // 波形表示用 per-sample gain スクラッチを maxBlockSize で確保（processBlock では追加 alloc しない）
+    waveformGainScratchA.assign(static_cast<size_t>(samplesPerBlock), 1.0f);
+    waveformGainScratchB.assign(static_cast<size_t>(samplesPerBlock), 1.0f);
+
+    // ---- 波形表示用リングバッファ準備 ----
+    //  slice サイズはサンプルレートに応じて決定（約 200 Hz）。
+    //  リアロケーションは prepare 時のみに限定する。
+    const double sliceHz = kWaveformSliceHz;
+    waveformSliceSize = juce::jmax(1, static_cast<int>(std::round(sampleRate / sliceHz)));
+    waveformSliceHz.store(static_cast<float>(sampleRate / static_cast<double>(waveformSliceSize)),
+                           std::memory_order_relaxed);
+    if (static_cast<int>(waveformPeakBuffer.size()) != kWaveformFifoSize)
+    {
+        waveformPeakBuffer.assign(kWaveformFifoSize, 0.0f);
+        waveformMinGainBuffer.assign(kWaveformFifoSize, 1.0f);
+    }
+    else
+    {
+        std::fill(waveformPeakBuffer.begin(), waveformPeakBuffer.end(), 0.0f);
+        std::fill(waveformMinGainBuffer.begin(), waveformMinGainBuffer.end(), 1.0f);
+    }
+    waveformFifo.reset();
+    waveformSliceSampleCount  = 0;
+    waveformSlicePeakAccum    = 0.0f;
+    waveformSliceMinGainAccum = 1.0f;
 }
 
 void ZeroLimitAudioProcessor::releaseResources()
@@ -273,19 +336,46 @@ void ZeroLimitAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     // --- リミッター ---
     //  Single: limiter 1 段のみ
     //  Multi : multibandLimiter（3 バンド）→ limiter（サム後の最終セーフティ）
+    //  Pro-L 風のスムーズな GR オーバーレイのため、per-sample gain を scratch バッファに取得して、
+    //   multi モードでは multibandLimiter のバンド間最小 × safety limiter の per-sample gain を
+    //   要素乗算して "総 gain" として波形 slice に使う。
     float minGain = 1.0f;
+    // スクラッチが足りない場合は追加確保（通常は prepare 側で十分。保険として）。
+    if (static_cast<int>(waveformGainScratchA.size()) < numSamples)
+        waveformGainScratchA.resize(static_cast<size_t>(numSamples), 1.0f);
+    if (static_cast<int>(waveformGainScratchB.size()) < numSamples)
+        waveformGainScratchB.resize(static_cast<size_t>(numSamples), 1.0f);
+
+    float* gainA = waveformGainScratchA.data();
+    float* gainB = waveformGainScratchB.data();
+
     if (multiMode)
     {
-        const float mbGain     = multibandLimiter.processBlock(buffer);
-        const float safetyGain = limiter.processBlock(buffer);
-        // 区間内の最大リダクション相当（バンド内の最深 × 最終セーフティ段）
+        const float mbGain     = multibandLimiter.processBlock(buffer, gainA);
+        const float safetyGain = limiter.processBlock(buffer, gainB);
         minGain = mbGain * safetyGain;
+        // per-sample 合成: gainA *= gainB
+        for (int i = 0; i < numSamples; ++i)
+            gainA[i] *= gainB[i];
     }
     else
     {
-        minGain = limiter.processBlock(buffer);
+        minGain = limiter.processBlock(buffer, gainA);
     }
     atomicMinFloat(minGainAccum, minGain);
+
+    // --- 波形表示用：入力 |L|,|R| マージ済みサンプルを slice にダウンサンプルして FIFO へ ---
+    //  Pro-L 風のオシロ表示。pre-limiter 入力ピーク + per-sample gain を渡して slice 内で最小 gain を集計。
+    //  これにより DAW ブロックサイズが slice サイズを超えても GR オーバーレイが階段状にならない。
+    {
+        auto* il = inputCopyBuffer.getReadPointer(0);
+        auto* ir = inputCopyBuffer.getReadPointer(std::min(1, numChannels - 1));
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float mergedAbs = std::max(std::abs(il[i]), std::abs(ir[i]));
+            pushWaveformSample(mergedAbs, gainA[i]);
+        }
+    }
 
     // --- Auto makeup gain + 出力ゲイン ---
     //  Threshold を下げた分（-thresholdDb）だけリミッタ段後に自動で補償し、

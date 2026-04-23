@@ -53,6 +53,7 @@ function registerDefaults(): void
   comboBoxStates.set('METERING_MODE', new WebComboBoxState(0, 3)); // Peak / RMS / Momentary
   comboBoxStates.set('MODE',          new WebComboBoxState(1, 2)); // Single / Multi（既定 Multi）
   comboBoxStates.set('BAND_COUNT',    new WebComboBoxState(0, 3)); // 3 / 4 / 5（既定 3）
+  comboBoxStates.set('DISPLAY_MODE',  new WebComboBoxState(0, 2)); // Metering / Waveform（既定 Metering）
 
   // --- パラメータ変更 → WebAudioEngine 連携 ---
 

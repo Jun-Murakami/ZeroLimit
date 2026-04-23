@@ -71,7 +71,9 @@ public:
     }
 
     // ステレオ in-place 処理。戻り値はバンド間の最小ゲイン（= 最大リダクション）。
-    float processStereoInPlace(float* L, float* R, int numSamples) noexcept
+    //  gainOut != nullptr なら各サンプルでの「バンド間最小 gain」（リニア 0..1）を書き出す。
+    //  配列長は最低でも numSamples 必要。
+    float processStereoInPlace(float* L, float* R, int numSamples, float* gainOut = nullptr) noexcept
     {
         if (preparedBlock > 0 && numSamples > preparedBlock)
         {
@@ -80,7 +82,8 @@ public:
             while (offset < numSamples)
             {
                 const int chunk = std::min(preparedBlock, numSamples - offset);
-                const float g = processStereoInPlace(L + offset, R + offset, chunk);
+                float* gOutChunk = gainOut ? (gainOut + offset) : nullptr;
+                const float g = processStereoInPlace(L + offset, R + offset, chunk, gOutChunk);
                 if (g < minG) minG = g;
                 offset += chunk;
             }
@@ -95,6 +98,8 @@ public:
             if (static_cast<int>(bandBufL[i].size()) < numSamples) bandBufL[i].resize(numSamples);
             if (static_cast<int>(bandBufR[i].size()) < numSamples) bandBufR[i].resize(numSamples);
         }
+        if (gainOut && static_cast<int>(bandGainScratch.size()) < numSamples)
+            bandGainScratch.resize(static_cast<size_t>(numSamples), 1.0f);
 
         float* bL[kMaxBands];
         float* bR[kMaxBands];
@@ -102,11 +107,21 @@ public:
 
         crossover.processBlock(L, R, numSamples, bL, bR);
 
+        // gainOut を 1.0 で初期化、バンドごとに per-sample gain の min を取る
+        if (gainOut)
+            for (int i = 0; i < numSamples; ++i) gainOut[i] = 1.0f;
+
         float minG = 1.0f;
         for (int i = 0; i < N; ++i)
         {
-            const float g = bandLimiters[i].processStereoInPlace(bL[i], bR[i], numSamples);
+            float* perSampleOut = gainOut ? bandGainScratch.data() : nullptr;
+            const float g = bandLimiters[i].processStereoInPlace(bL[i], bR[i], numSamples, perSampleOut);
             if (g < minG) minG = g;
+            if (gainOut)
+            {
+                for (int s = 0; s < numSamples; ++s)
+                    if (perSampleOut[s] < gainOut[s]) gainOut[s] = perSampleOut[s];
+            }
         }
 
         // サム
@@ -165,6 +180,8 @@ private:
     std::array<ZeroLatencyLimiter, kMaxBands> bandLimiters;
     std::array<std::vector<float>, kMaxBands> bandBufL;
     std::array<std::vector<float>, kMaxBands> bandBufR;
+    // per-sample gain 集計用スクラッチ（bandLimiter から受け取って min 合成）
+    std::vector<float> bandGainScratch;
 };
 
 } // namespace zl_wasm

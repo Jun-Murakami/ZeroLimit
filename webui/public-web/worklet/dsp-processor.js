@@ -15,6 +15,16 @@ class DspProcessor extends AudioWorkletProcessor {
     this.outRPtr = 0;
     this.meterBufPtr = 0; // 13 floats
 
+    // 波形表示用（Pro-L 風オシロ）。ring から pull する JS 側のテンプバッファ。
+    //  1 更新あたり最大でも数十サンプル（sampleRate / 200 × blocksPerUpdate）程度。
+    //  余裕を持って 256 slot 用意。dsp_get_waveform_slices が書き込む。
+    this.waveformMaxPerPull = 256;
+    this.waveformPeaksPtr = 0;
+    this.waveformGrDbPtr  = 0;
+    // 波形機能が WASM 側にエクスポートされているか（後方互換）
+    this.waveformAvailable = false;
+    this.waveformSliceHz = 200;
+
     this.updateCounter = 0;
 
     this.port.onmessage = (e) => this.handleMessage(e.data);
@@ -98,6 +108,16 @@ class DspProcessor extends AudioWorkletProcessor {
       this.outRPtr = this.wasm.dsp_alloc_buffer(128);
       this.meterBufPtr = this.wasm.dsp_alloc_buffer(13);
 
+      // 波形 API は古い wasm には無いので optional 扱い
+      if (typeof this.wasm.dsp_get_waveform_slices === 'function') {
+        this.waveformPeaksPtr = this.wasm.dsp_alloc_buffer(this.waveformMaxPerPull);
+        this.waveformGrDbPtr  = this.wasm.dsp_alloc_buffer(this.waveformMaxPerPull);
+        this.waveformAvailable = true;
+        if (typeof this.wasm.dsp_get_waveform_slice_hz === 'function') {
+          this.waveformSliceHz = this.wasm.dsp_get_waveform_slice_hz() || 200;
+        }
+      }
+
       this.wasmReady = true;
       this.port.postMessage({ type: 'wasm-ready' });
     } catch (err) {
@@ -130,6 +150,27 @@ class DspProcessor extends AudioWorkletProcessor {
       const mh = new Float32Array(this.wasmMemory.buffer);
       const mo = this.meterBufPtr / 4;
 
+      // 波形スライスをドレイン（optional）
+      let waveformPayload = null;
+      if (this.waveformAvailable) {
+        const got = this.wasm.dsp_get_waveform_slices(
+          this.waveformPeaksPtr,
+          this.waveformGrDbPtr,
+          this.waveformMaxPerPull,
+        );
+        if (got > 0) {
+          const peaksView = new Float32Array(this.wasmMemory.buffer, this.waveformPeaksPtr, got);
+          const grDbView  = new Float32Array(this.wasmMemory.buffer, this.waveformGrDbPtr,  got);
+          // port に渡す時点で配列コピー（detach 不要の single-transferable 方針は見送り、
+          //  postMessage の structured clone でコピーされる。slice 数は 1 更新あたり高々数十なので低負荷）
+          waveformPayload = {
+            sliceHz: this.waveformSliceHz,
+            peaks:   Array.from(peaksView),
+            grDb:    Array.from(grDbView),
+          };
+        }
+      }
+
       this.port.postMessage({
         type: 'state-update',
         position: this.wasm.dsp_get_position(),
@@ -150,6 +191,7 @@ class DspProcessor extends AudioWorkletProcessor {
           outMomentary:   mh[mo + 10],
           grDb:           mh[mo + 11],
         },
+        waveform: waveformPayload,
       });
     }
 

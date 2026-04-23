@@ -42,7 +42,9 @@ public:
     void setAutoReleaseEnabled(bool e) noexcept { autoReleaseEnabled = e; }
 
     // ステレオ in-place 処理。戻り値は区間中の最小ゲイン（= 最大リダクション）。
-    float processStereoInPlace(float* L, float* R, int numSamples) noexcept
+    //  gainOut != nullptr なら各サンプルで適用した gain（リニア 0..1）を書き出す。
+    //  配列長は最低でも numSamples 必要。
+    float processStereoInPlace(float* L, float* R, int numSamples, float* gainOut = nullptr) noexcept
     {
         float minG = 1.0f;
         const bool arc = autoReleaseEnabled;
@@ -64,6 +66,7 @@ public:
             const float applied = arc ? std::min(currentGain, currentGainSlow) : currentGain;
             L[i] = inL * applied;
             R[i] = inR * applied;
+            if (gainOut) gainOut[i] = applied;
             if (applied < minG) minG = applied;
         }
         return minG;

@@ -11,13 +11,14 @@ A **zero-latency** brickwall limiter for broadcast, streaming, and music masteri
 - **Auto Release** — program-dependent dual-envelope release (fast + slow, min). Per-band time constants are adapted to each band's center frequency in multiband mode.
 - **Auto Makeup Gain** — lowering the threshold automatically compensates the post-limiter level.
 - **Five-mode metering** — Input L/R, Gain Reduction, Output L/R, with Peak / RMS / Momentary LKFS (ITU-R BS.1770-4) switchable.
+- **Waveform display mode** — Pro-L style oscilloscope (~7 sec scrollback): input envelope, threshold line, and per-sample gain-reduction reflection. Switch on the fly between meter view and waveform view.
 - **Link** — Threshold ⇔ Output Gain move together while preserving their relative offset.
 - **Formats**: VST3, AU (macOS), AAX (when the SDK is present), Standalone.
 
 ## Screenshot
 
 <img width="747" height="819" alt="image" src="https://github.com/user-attachments/assets/e28971f9-7c49-4d21-bf13-31abb0751554" />
-The plugin window is resizable (minimum 410 × 390, default 470 × 470). Faders, meters, and the multiband band selector stretch fluidly.
+The plugin window is resizable (minimum 447 × 390, default 453 × 470). Faders, meters, the waveform canvas, and the multiband band selector all stretch fluidly.
 
 ## Requirements
 
@@ -83,11 +84,10 @@ Debug builds load the WebUI from `http://127.0.0.1:5173`. Release builds embed t
 | `RELEASE_MS`   | float (ms, log skew) | 0.01 .. 1000                       | 1.0 ms   | Manual release (Single-band only; ignored in Multi).                  |
 | `AUTO_RELEASE` | bool                 | false / true                       | true     | Program-dependent dual-envelope. Forced true in Multi.                |
 | `LINK`         | bool                 | false / true                       | false    | Locks Threshold and Output Gain to a constant offset.                 |
-| `METERING_MODE`| choice               | Peak / RMS / Momentary             | Peak     | Display mode for IN / OUT meters.                                     |
+| `METERING_MODE`| choice               | Peak / RMS / Momentary             | Peak     | Display mode for IN / OUT meters. Forced to Peak in Waveform view.    |
 | `MODE`         | choice               | Single / Multi                     | **Multi**| Zero-latency wideband vs. multiband limiter.                          |
 | `BAND_COUNT`   | choice               | 3 Band / 4 Band / 5 Band           | **3**    | Active only when MODE = Multi.                                        |
-
-The -30..0 dB range matches the industry-standard Waves L2 convention.
+| `DISPLAY_MODE` | choice               | Metering / Waveform                | Metering | Center-panel visual: 5-bar meter array vs. oscilloscope waveform.     |
 
 ## Multiband details
 
@@ -97,11 +97,24 @@ All multiband modes use **Linkwitz-Riley 4th-order IIR** crossovers (cascaded 2n
 | ------- | ---------------------------- | ---------------------------------------------------------- |
 | 3-band  | 120 Hz / 5 kHz               | Broadcast-first. Keeps the full vocal spectrum (F0 through presence) inside a single phase-coherent Mid band. |
 | 4-band  | 150 Hz / 5 kHz / 15 kHz      | Matches the default of Steinberg's MultibandCompressor. Adds an Air band on top of the 3-band layout. |
-| 5-band  | 80 / 250 / 1k / 5k Hz        | Mirrors Universal Audio's all-round preset. Finer spectral control for music mastering; crossovers inevitably traverse vocal formants. |
+| 5-band  | 80 / 250 / 1k / 5k Hz        | Finer spectral control for music mastering; crossovers inevitably traverse vocal formants. |
 
 Release time constants are per-band and adapted to each band's center frequency (low bands slower, high bands faster). In Multi mode the release controls in the UI are disabled since each band runs its own auto-release.
 
 After the bands are summed, a final safety limiter catches any residual peak from phase reconstruction so the output is guaranteed brickwall at the threshold.
+
+## Waveform display mode
+
+The center panel can be toggled between the conventional 5-bar meter array and oscilloscope view. Toggle live via the `Metering / Waveform` switch at the bottom-right of the Release section.
+
+- **Waveform envelope (cyan)** — pre-limiter input peaks, merged L/R absolute value, downsampled to 200 Hz slices (~5 ms/slice) and scrolled right-to-left over a 7-second window.
+- **Threshold line (white, dashed)** — horizontal indicator that tracks the current Threshold parameter.
+- **Above-threshold region (light gray)** — the portion of the virtual input envelope that would exceed threshold. Rendered as a muted overlay.
+- **Gain-reduction reflection (red)** — mirrored below the threshold line in real-time. The depth at each slice represents the *actual* per-sample gain applied by the limiter, not a simple input-above-threshold calculation, so the envelope reflects release-envelope behavior faithfully.
+- **Right-side strip** — a thin GR bar + OUT meter remain visible even in waveform view so level and reduction can still be read at a glance. Metering mode is pinned to Peak here.
+- **Performance** — canvas drawing is paused during window resize to keep drag interactions smooth; it resumes automatically once the ResizeObserver settles.
+
+Internally the DSP tracks per-sample gain (limiter's applied value, or the per-sample minimum across bands in multi-band mode) into a scratch buffer, so the visualization resolution is decoupled from the DAW's block size.
 
 ## Latency verification
 

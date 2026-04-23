@@ -14,9 +14,11 @@ import {
 } from './components/VUMeter';
 import { ReleaseSection } from './components/ReleaseSection';
 import { useHostShortcutForwarding } from './hooks/useHostShortcutForwarding';
+import { useGlobalZoomGuard } from './hooks/useGlobalZoomGuard';
 import { GlobalDialog } from './components/GlobalDialog';
 import LicenseDialog from './components/LicenseDialog';
 import { WebTransportBar } from './components/WebTransportBar';
+import { WaveformView } from './components/WaveformView';
 
 const IS_WEB_MODE = import.meta.env.VITE_RUNTIME === 'web';
 import type { MeterUpdateData } from './types';
@@ -36,6 +38,7 @@ const MODE_LABEL: Record<MeterMode, string> = {
 
 function App() {
   useHostShortcutForwarding();
+  useGlobalZoomGuard();
 
   // メーター現在値（バー描画用）
   const [inL, setInL] = useState(MIN_DB);
@@ -70,6 +73,11 @@ function App() {
   const { index: meterModeIndex, setIndex: setMeterModeIndexJuce } = useJuceComboBoxIndex('METERING_MODE');
   const meterMode: MeterMode = MODES[meterModeIndex] ?? 'peak';
 
+  // DISPLAY_MODE（0 = Metering, 1 = Waveform）。中央のビジュアル切替。
+  //  UI トグル本体は ReleaseSection 側（最上段右）。ここでは現在値だけ購読してレイアウト分岐に使う。
+  const { index: displayModeIndex } = useJuceComboBoxIndex('DISPLAY_MODE');
+  const isWaveformMode = displayModeIndex === 1;
+
   // モード切替時に古い state をリセットしてちらつきを防ぐ。
   //  JUCE は選択モードに該当するデータしか送らないため、切替直後の一瞬、
   //  UI は新モードで描画する一方で内部 state は旧モードの値のままになる。
@@ -96,6 +104,10 @@ function App() {
     setMeterModeIndexJuce(next);
   };
 
+  // Waveform モード時は METERING_MODE を Peak (=0) に固定する。
+  //  実行は Waveform/Metering トグル（ReleaseSection 側）の onClick で
+  //  DISPLAY_MODE と同じハンドラ内で同時更新する（useEffect で値変化を監視しない方針）。
+
   // ============================
   // Threshold / Output Gain の Link 機能
   // ============================
@@ -112,11 +124,11 @@ function App() {
   const outputGainSlider = useJuceSliderState('OUTPUT_GAIN');
   const { value: linkActive, setValue: setLinkJuce } = useJuceToggleValue('LINK');
 
-  // Link state を listener クロージャから参照するための ref
+  // Link state を listener クロージャから参照するための ref（Latest Ref Pattern）。
+  //  useEffect で反映させると commit 後に更新されるため、commit より前に走る listener が
+  //  1 フレーム古い値を見る timing bug がありうる。render 中代入で常に同期を保証する。
   const linkActiveRef = useRef<boolean>(linkActive);
-  useEffect(() => {
-    linkActiveRef.current = linkActive;
-  }, [linkActive]);
+  linkActiveRef.current = linkActive;
 
   // Link ON 時点の (Output - Threshold) オフセット
   const deltaRef = useRef<number>(0);
@@ -139,17 +151,17 @@ function App() {
   const suppressOutputUntilRef    = useRef<number>(0);
 
   // LINK が OFF→ON に変わる瞬間を検出して delta を更新する（DAW オートメーション対応）。
-  //  linkActive の reactive な値は useSyncExternalStore 側で既に担保済みなので、
-  //  ここでは副作用（delta 更新）だけを useEffect で処理する。
+  //  render 中に rising edge 検出 + ref 更新を行う。ユーザー操作は toggleLink() 側でも同じ
+  //  delta を計算しているが（そちらは setState 前に ref を確定させる）、DAW オートメーション経由で
+  //  外部から linkActive が変わるケースをここでカバーする。
+  //  StrictMode で render が 2 回走っても、2 回目は prevRef=cur となり rising edge 検出は自然に無効化される。
   const prevLinkActiveRef = useRef<boolean>(linkActive);
-  useEffect(() => {
-    if (linkActive && ! prevLinkActiveRef.current) {
-      const tNow = thresholdSlider ? thresholdSlider.getScaledValue() : 0;
-      const oNow = outputGainSlider ? outputGainSlider.getScaledValue() : 0;
-      deltaRef.current = oNow - tNow;
-    }
-    prevLinkActiveRef.current = linkActive;
-  }, [linkActive, thresholdSlider, outputGainSlider]);
+  if (linkActive && ! prevLinkActiveRef.current) {
+    const tNow = thresholdSlider ? thresholdSlider.getScaledValue() : 0;
+    const oNow = outputGainSlider ? outputGainSlider.getScaledValue() : 0;
+    deltaRef.current = oNow - tNow;
+  }
+  prevLinkActiveRef.current = linkActive;
 
   // Threshold 変化 → Output をミラー（必要な時のみ）
   useEffect(() => {
@@ -250,11 +262,15 @@ function App() {
     return () => juceBridge.removeEventListener(id);
   }, []);
 
+  // ネイティブへの "ready" 通知（マウント時 1 回）。関連性のない contextmenu listener は別エフェクトに分離。
   useEffect(() => {
     juceBridge.whenReady(() => {
       juceBridge.callNative('system_action', 'ready');
     });
+  }, []);
 
+  // 右クリック (contextmenu) 抑制。入力系要素・明示 opt-in クラス・DEV モードは除外。
+  useEffect(() => {
     const onContextMenu = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
       if (!t) return;
@@ -274,26 +290,38 @@ function App() {
 
   // メインコントロール領域（Paper 内、Release セクションを除いた部分）のサイズを観測。
   //  フェーダー / メーターの高さとバー幅を動的に算出する。
+  //  加えて「リサイズ中」状態を debounce で検出 → WaveformView に伝えて描画を一時停止する
+  //   （ウィンドウドラッグ中は ResizeObserver が 60Hz+ で連続発火し、canvas 再 alloc と
+  //    ポリゴン描画が重なって重くなるため）。
   const mainRef = useRef<HTMLDivElement | null>(null);
   const [mainSize, setMainSize] = useState<{ width: number; height: number }>({ width: 520, height: 260 });
+  const [isResizing, setIsResizing] = useState(false);
   useEffect(() => {
     const el = mainRef.current;
     if (!el) return;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const w = entry.contentRect.width;
         const h = entry.contentRect.height;
         setMainSize((prev) => (prev.width !== w || prev.height !== h ? { width: w, height: h } : prev));
       }
+      // 連続発火している間は true、最後の発火から 150ms 静寂になったら false に戻す
+      setIsResizing(true);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => setIsResizing(false), 150);
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      if (debounceTimer) clearTimeout(debounceTimer);
+    };
   }, []);
 
   // --- 派生サイズ ---
   //   フェーダー / メーターの縦長部分 (slider rail or canvas) に割り当てる高さ。
-  //   メーター列のヘッダ(36) + hold 行(14 + mt 2) + モード切替ボタン(24 + mt 8) の 84px を差し引く。
-  const meterAndFaderHeight = Math.max(80, Math.floor(mainSize.height - 84));
+  //   メーター列のヘッダ(36) + hold 行(14 + mt 2) + モード切替ボタン(22 + mt 4) の 78px を差し引く。
+  const meterAndFaderHeight = Math.max(80, Math.floor(mainSize.height - 78));
 
   //   中央メーター領域の幅 = 全体幅 - フェーダー幅×2 (60×2) - grid の gap 2(=16)×2 = 全体 -152
   //   そこから GR バー幅(48) と IN/OUT 間のセンターギャップ(0.25×2 = 4) を差し引いて 2 等分。
@@ -301,6 +329,13 @@ function App() {
   const meterColumnWidth = Math.max(52, Math.floor((meterAreaWidth - 48 - 4) / 2));
   //   L/R ペアの各バー幅（gap 0.25 = 2px を引いて半分）
   const levelBarWidth = Math.max(24, Math.floor((meterColumnWidth - 2) / 2));
+
+  // Waveform モード時のレイアウト：
+  //   [Waveform ... | 薄 GR | 薄 OUT(merged)]
+  //   右側の薄いバー 2 本分と gap を確保し、残りを波形キャンバスに割り当てる。
+  const thinBarWidth = 18;
+  const thinGap = 2;
+  const waveformWidth = Math.max(60, meterAreaWidth - thinBarWidth * 2 - thinGap * 2);
 
   // リサイズハンドル（Standalone 用）
   const dragState = useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null);
@@ -313,7 +348,7 @@ function App() {
     const dx = e.clientX - dragState.current.startX;
     const dy = e.clientY - dragState.current.startY;
     // C++ 側 PluginEditor の kMinWidth / kMinHeight と合わせる
-    const w = Math.max(410, dragState.current.startW + dx);
+    const w = Math.max(447, dragState.current.startW + dx);
     const h = Math.max(390, dragState.current.startH + dy);
     if (!window.__resizeRAF) {
       window.__resizeRAF = requestAnimationFrame(() => {
@@ -386,18 +421,19 @@ function App() {
         {/* Web モード時のみ、トランスポート（再生 / シーク / Bypass / ファイル選択）を
             プラグインカードの外に配置する。プラグイン本体の機能ではない操作系なので。 */}
         {IS_WEB_MODE && (
-          <Box sx={{ width: '100%', maxWidth: 500 }}>
+          <Box sx={{ width: '100%', maxWidth: 600 }}>
             <WebTransportBar />
           </Box>
         )}
 
         {/* Web モード時はプラグイン UI をカード化して幅固定・影つきに。
-            プラグインモードでは透過（display: 'contents'）して従来のフレックス挙動を維持。 */}
+            プラグインモードでは透過（display: 'contents'）して従来のフレックス挙動を維持。
+            最小幅は plugin 版の kMinWidth=447 に揃える（下段の Bands + トグルが収まる幅）。 */}
         <Box
           sx={IS_WEB_MODE
             ? {
                 width: '100%',
-                maxWidth: 500,
+                maxWidth: 600,
                 height: 500,
                 display: 'flex',
                 flexDirection: 'column',
@@ -443,7 +479,7 @@ function App() {
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'flex-start',
-            gap: 1,
+            gap: 0,
           }}
         >
           <Box
@@ -527,7 +563,55 @@ function App() {
                 フェーダー側も各メーター側もヘッダを height: 36 に固定しているため、
                 ここでは追加の mt を取らない（バー上端と rail 上端は自動で揃う）。 */}
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              {/* メーター 3 列を隣接させる（列幅を固定して左右にズレないように） */}
+              {isWaveformMode ? (
+                // ---- Waveform モード: 左に波形キャンバス、右に細い GR + OUT(merged) ----
+                <Box sx={{ display: 'flex', gap: `${thinGap}px`, alignItems: 'flex-start' }}>
+                  {/* Waveform キャンバス（ヘッダ分 36px の空きをつくって他列とバー上端を揃える） */}
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <Box sx={{ height: 36 }} />
+                    <WaveformView width={waveformWidth} height={meterAndFaderHeight} isResizing={isResizing} />
+                    {/* hold 行と高さを揃える空きボックス（モード切替でズレないため） */}
+                    <Box sx={{ mt: 0.25, height: 14 }} />
+                  </Box>
+
+                  {/* 薄い GR */}
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <GainReductionMeterBar grDb={grDb} width={thinBarWidth} height={meterAndFaderHeight} compact />
+                    <Tooltip title='Reset Hold'>
+                      <Box
+                        onClick={resetGrHold}
+                        sx={{ mt: 0.25, display: 'flex', alignItems: 'center', justifyContent: 'center', height: 14, cursor: 'pointer', userSelect: 'none' }}
+                      >
+                        <Typography variant='caption' sx={{ fontSize: '9px', width: thinBarWidth, textAlign: 'center', lineHeight: 1 }}>
+                          -{grHold.toFixed(1)}
+                        </Typography>
+                      </Box>
+                    </Tooltip>
+                  </Box>
+
+                  {/* 薄い OUT（merged: max(L,R) を単バーで） */}
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <LevelMeterBar
+                      level={Math.max(outL, outR)}
+                      label='OUT'
+                      width={thinBarWidth}
+                      height={meterAndFaderHeight}
+                    />
+                    <Tooltip title='Reset Hold'>
+                      <Box
+                        onClick={resetOutHold}
+                        sx={{ mt: 0.25, display: 'flex', alignItems: 'center', justifyContent: 'center', height: 14, cursor: 'pointer', userSelect: 'none' }}
+                      >
+                        <Typography variant='caption' sx={{ fontSize: '9px', width: thinBarWidth, textAlign: 'center', lineHeight: 1 }}>
+                          {formatDb(Math.max(outHold.left, outHold.right))}
+                        </Typography>
+                      </Box>
+                    </Tooltip>
+                  </Box>
+                </Box>
+              ) : (
+              // ---- Metering モード（従来のメーター 3 列） ----
+              // メーター 3 列を隣接させる（列幅を固定して左右にズレないように）
               <Box sx={{ display: 'flex', gap: 0.25, alignItems: 'flex-start' }}>
                 {/* IN */}
                 <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: meterColumnWidth }}>
@@ -697,34 +781,39 @@ function App() {
                   )}
                 </Box>
               </Box>
+              )}
 
-              {/* メーター群の下にモード切替ボタン（メーター列の幅に影響しない位置） */}
-              <Tooltip title='Meter display mode' arrow>
-                <Button
-                  onClick={cycleMeterMode}
-                  size='small'
-                  variant='contained'
-                  sx={{
-                    mt: 1,
-                    textTransform: 'none',
-                    // "Momentary" も含めて固定幅にし、ラベル切替で横幅が動かないように。
-                    width: 92,
-                    minWidth: 92,
-                    px: 1,
-                    py: 0.1,
-                    height: 22,
-                    fontSize: '0.72rem',
-                    border: '1px solid',
-                    borderColor: 'divider',
-                    backgroundColor: 'transparent',
-                    color: 'text.secondary',
-                    '&:hover': { backgroundColor: 'grey.700' },
-                  }}
-                  aria-label='meter display mode'
-                >
-                  {MODE_LABEL[meterMode]}
-                </Button>
-              </Tooltip>
+              {/* メーター群の下にモード切替ボタン（Peak / RMS / Momentary）。
+                  Waveform/Metering 切替は Release セクション最上段の右側へ移動した。
+                  Waveform モード時は右端の細い OUT バーしか出ず Peak 固定なので、ここも非表示。 */}
+              {!isWaveformMode && (
+                <Tooltip title='Meter display mode (Peak / RMS / Momentary)' arrow>
+                  <Button
+                    onClick={cycleMeterMode}
+                    size='small'
+                    variant='contained'
+                    sx={{
+                      mt: 0.5,
+                      textTransform: 'none',
+                      // "Momentary" も含めて固定幅にし、ラベル切替で横幅が動かないように。
+                      width: 92,
+                      minWidth: 92,
+                      px: 1,
+                      py: 0.1,
+                      height: 16,
+                      fontSize: '0.72rem',
+                      border: '1px solid',
+                      borderColor: 'divider',
+                      backgroundColor: 'transparent',
+                      color: 'text.secondary',
+                      '&:hover': { backgroundColor: 'grey.700' },
+                    }}
+                    aria-label='meter display mode'
+                  >
+                    {MODE_LABEL[meterMode]}
+                  </Button>
+                </Tooltip>
+              )}
             </Box>
 
             {/* 右: Output Gain フェーダー */}
@@ -779,7 +868,7 @@ function App() {
           <Typography
             variant='caption'
             color='text.secondary'
-            sx={{ mt: 1, textAlign: 'center', maxWidth: 500, lineHeight: 1.8, px: 2 }}
+            sx={{ mt: 1, textAlign: 'center', maxWidth: 453, lineHeight: 1.8, px: 2 }}
           >
             A zero-latency brickwall limiter with multiband processing. DSP compiled to WebAssembly — running fully in your browser.
             <br />

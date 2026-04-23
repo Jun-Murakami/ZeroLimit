@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, FormControlLabel, Slider, Switch, Typography, Input } from '@mui/material';
+import { Box, Divider, FormControlLabel, Slider, Switch, Tooltip, Typography, Input } from '@mui/material';
 import { useJuceComboBoxIndex, useJuceSliderValue, useJuceToggleValue } from '../hooks/useJuceParam';
+import { useFineAdjustPointer } from '../hooks/useFineAdjustPointer';
+import { useNumberInputAdjust } from '../hooks/useNumberInputAdjust';
 
 //
 //  Release セクション（Auto/Manual Release + 0.01..1000 ms 対数スライダー）
@@ -39,6 +41,23 @@ export const ReleaseSection: React.FC = () => {
   const multiMode = modeIndex === 1;
   // Multi モードのバンド数（0=3, 1=4, 2=5）
   const { index: bandCountIdx, setIndex: setBandCountIdx } = useJuceComboBoxIndex('BAND_COUNT');
+  // DISPLAY_MODE（0=Metering, 1=Waveform）。Waveform/Metering トグル本体はこのセクションの右上。
+  const { index: displayModeIdx, setIndex: setDisplayModeIdx } = useJuceComboBoxIndex('DISPLAY_MODE');
+  const isWaveformMode = displayModeIdx === 1;
+  // Waveform モードに入るときは METERING_MODE も Peak(=0) に強制したいので setter を取っておく。
+  //  （value は使わないが、useJuceComboBoxIndex は購読もするので再レンダーは走る。
+  //   ReleaseSection は METERING_MODE 値に依存した描画を持たないため影響なし。）
+  const { setIndex: setMeterModeIdx } = useJuceComboBoxIndex('METERING_MODE');
+
+  // Waveform / Metering トグルのハンドラ。
+  //  Waveform へ入るときは METERING_MODE も Peak(=0) にリセット（細い OUT バーが Peak 固定なので）。
+  //  meterUpdate 側でモード変化を検出して state をクリアする既存ロジックが走るため、
+  //  こちらでは APVTS の 2 値を同時に書けば十分。
+  const toggleDisplayMode = () => {
+    const next = isWaveformMode ? 0 : 1;
+    setDisplayModeIdx(next);
+    if (next === 1) setMeterModeIdx(0);
+  };
 
   const [isEditing, setIsEditing] = useState(false);
   const [inputText, setInputText] = useState<string>('');
@@ -74,18 +93,28 @@ export const ReleaseSection: React.FC = () => {
     }
   };
 
-  // Ctrl/Cmd クリックで既定値 1.0 ms
-  const handleSliderClick = (e: React.MouseEvent) => {
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      e.stopPropagation();
-      applyNormalised(msToNorm(1.0));
-    }
-  };
-
   const handleToggleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setAutoReleaseJuce(e.target.checked);
   };
+
+  // 修飾キー + ポインタ操作：
+  //  Ctrl/Cmd + クリック      → 既定値 1.0 ms へリセット
+  //  (Ctrl/Cmd/Shift) + ドラッグ → 微調整モード（log 正規化空間で 1px = 0.002 norm）
+  //  修飾キーなし              → MUI Slider の通常ドラッグに委譲
+  const fineDragStartNormRef = useRef<number>(0);
+  const handleSliderPointerDownCapture = useFineAdjustPointer({
+    orientation: 'horizontal',
+    onReset: () => applyNormalised(msToNorm(1.0)),
+    onDragStart: () => {
+      fineDragStartNormRef.current = msToNorm(releaseMsRef.current);
+      sliderState?.sliderDragStarted();
+    },
+    onDragDelta: (deltaPx) => {
+      // 1px = 0.002 norm。log 軸全域（0.01..1000 ms）を 500px で横断。
+      applyNormalised(fineDragStartNormRef.current + deltaPx * 0.002);
+    },
+    onDragEnd: () => sliderState?.sliderDragEnded(),
+  });
 
   // ホイール（非パッシブ）
   const wheelRef = useRef<HTMLDivElement | null>(null);
@@ -95,7 +124,8 @@ export const ReleaseSection: React.FC = () => {
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const direction = -event.deltaY > 0 ? 1 : -1;
-      const step = event.shiftKey ? 0.01 : 0.05;
+      const fine = event.shiftKey || event.ctrlKey || event.metaKey || event.altKey;
+      const step = fine ? 0.01 : 0.05;
       const currentT = msToNorm(releaseMsRef.current);
       applyNormalised(currentT + step * direction);
     };
@@ -104,6 +134,26 @@ export const ReleaseSection: React.FC = () => {
       el.removeEventListener('wheel', onWheel as EventListener);
     };
   }, [sliderState]);
+
+  // 数値入力欄（ms）のホイール / 縦ドラッグ
+  const inputElRef = useRef<HTMLInputElement | null>(null);
+  const inputDragStartNormRef = useRef<number>(0);
+  useNumberInputAdjust(inputElRef, {
+    onWheelStep: (direction, fine) => {
+      const step = fine ? 0.01 : 0.05;
+      const currentT = msToNorm(releaseMsRef.current);
+      applyNormalised(currentT + step * direction);
+    },
+    onDragStart: () => {
+      inputDragStartNormRef.current = msToNorm(releaseMsRef.current);
+      sliderState?.sliderDragStarted();
+    },
+    onDragDelta: (deltaY, fine) => {
+      const step = fine ? 0.002 : 0.01;
+      applyNormalised(inputDragStartNormRef.current + deltaY * step);
+    },
+    onDragEnd: () => sliderState?.sliderDragEnded(),
+  });
 
   // Input: 表示値は編集中だけローカル state、それ以外は releaseMs から導出
   const displayInput = isEditing ? inputText : formatMs(releaseMs).replace(' ms', '').trim();
@@ -129,86 +179,151 @@ export const ReleaseSection: React.FC = () => {
   const releaseSectionDisabled = multiMode;
 
   return (
+    // レイアウト方針（T 字型 divider）:
+    //   外枠 = flex column
+    //    ├── 上段: 左右 2 カラム flex（中央に垂直 Divider、上段の高さまで）
+    //    ├── 水平 Divider（外枠の全幅: 左端〜右端）
+    //    └── 下段: 全幅（Auto/Manual + ms + Slider）
+    //   これにより 3 つの交点（水平 divider の左端 / 中央 T / 右端）がすべて外枠に接触する。
+    //   外枠直下の p:1 は削除し、各コンテンツボックスへ個別にパディングをかけることで
+    //   divider は外枠まで届きつつ、文字要素のインセットは従来どおり保つ。
     <Box
       sx={{
         width: '100%',
-        mt: 1.5,
         border: '1px solid',
-        borderColor: 'text.secondary',
+        borderColor: 'divider',
         borderRadius: 1,
-        p: 1,
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
-      {/* === 上段: Single / Multi バンドモード切替 + Multi 時のバンド数セレクタ ===
-          Multi が既定かつメインの動作モードなので、セクションの先頭に配置する。
-          各バンド数の crossover とバンド別時定数は DSP 側で固定（ゼロコンフィグ）:
-            3-band: 120 Hz / 5 kHz                 （放送、声を Mid に閉じ込め）← 既定
-            4-band: 150 Hz / 5 kHz / 15 kHz        （Steinberg 準拠）
-            5-band: 80 / 250 / 1k / 5k Hz          （UA 準拠、音楽マスタリング志向） */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={multiMode}
-              onChange={(e) => setModeIndex(e.target.checked ? 1 : 0)}
-              size='small'
-            />
-          }
-          label={multiMode ? 'Multi-band' : 'Single-band'}
-          sx={{
-            m: 0,
-            color: multiMode ? 'primary.main' : 'text.primary',
-            '& .MuiFormControlLabel-label': { fontSize: '0.875rem', fontWeight: multiMode ? 600 : 400 },
-          }}
-        />
-        {multiMode && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            {/* 「Bands」ラベル。数字だけだと何の値か不明瞭なので明示する。 */}
-            <Typography variant='caption' sx={{ fontSize: '0.75rem', color: 'text.secondary', mr: 0.5 }}>
-              Bands
-            </Typography>
-            {/* バンド数切替（3 / 4 / 5） */}
-            <Box sx={{ display: 'flex', border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
-              {[
-                { label: '3', idx: 0 },
-                { label: '4', idx: 1 },
-                { label: '5', idx: 2 },
-              ].map((opt) => {
-                const active = bandCountIdx === opt.idx;
-                return (
-                  <Box
-                    key={opt.idx}
-                    onClick={() => setBandCountIdx(opt.idx)}
-                    sx={{
-                      px: 1,
-                      py: 0.15,
-                      fontSize: '0.72rem',
-                      fontWeight: active ? 600 : 400,
-                      cursor: 'pointer',
-                      backgroundColor: active ? 'primary.main' : 'transparent',
-                      color: active ? 'background.paper' : 'text.secondary',
-                      minWidth: 22,
-                      textAlign: 'center',
-                      userSelect: 'none',
-                      transition: 'background-color 80ms',
-                      '&:hover': { backgroundColor: active ? 'primary.dark' : 'grey.700' },
-                    }}
-                  >
-                    {opt.label}
-                  </Box>
-                );
-              })}
+      {/* ====== 上段: 左 = バンドモード（Single/Multi + Bands）、右 = 表示切替（Metering/Waveform） ====== */}
+      <Box sx={{ display: 'flex', alignItems: 'stretch' }}>
+        {/* --- 上段 左 --- */}
+        <Box sx={{ flex: 1, minWidth: 0, p: 1 }}>
+          {/* === Single/Multi バンドモード切替 + Multi 時のバンド数 ===
+              各バンド数の crossover とバンド別時定数は DSP 側で固定（ゼロコンフィグ）:
+                3-band: 120 Hz / 5 kHz                 （放送、声を Mid に閉じ込め）← 既定
+                4-band: 150 Hz / 5 kHz / 15 kHz        （Steinberg 準拠）
+                5-band: 80 / 250 / 1k / 5k Hz          （UA 準拠、音楽マスタリング志向） */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1, minWidth: 0 }}>
+              <FormControlLabel
+            control={
+              <Switch
+                checked={multiMode}
+                onChange={(e) => setModeIndex(e.target.checked ? 1 : 0)}
+                size='small'
+              />
+            }
+            label={multiMode ? 'Multi-band' : 'Single-band'}
+            sx={{
+              m: 0,
+              color: multiMode ? 'primary.main' : 'text.primary',
+              '& .MuiFormControlLabel-label': { fontSize: '0.875rem', fontWeight: multiMode ? 600 : 400 },
+            }}
+          />
+          {multiMode && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              {/* 「Bands」ラベル。数字だけだと何の値か不明瞭なので明示する。 */}
+              <Typography variant='caption' sx={{ fontSize: '0.75rem', color: 'text.secondary', mr: 0.5 }}>
+                Bands
+              </Typography>
+              {/* バンド数切替（3 / 4 / 5） */}
+              <Box sx={{ display: 'flex', border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
+                {[
+                  { label: '3', idx: 0 },
+                  { label: '4', idx: 1 },
+                  { label: '5', idx: 2 },
+                ].map((opt) => {
+                  const active = bandCountIdx === opt.idx;
+                  return (
+                    <Box
+                      key={opt.idx}
+                      onClick={() => setBandCountIdx(opt.idx)}
+                      sx={{
+                        px: 1,
+                        py: 0.15,
+                        fontSize: '0.72rem',
+                        fontWeight: active ? 600 : 400,
+                        cursor: 'pointer',
+                        backgroundColor: active ? 'primary.main' : 'transparent',
+                        color: active ? 'background.paper' : 'text.secondary',
+                        minWidth: 22,
+                        textAlign: 'center',
+                        userSelect: 'none',
+                        transition: 'background-color 80ms',
+                        '&:hover': { backgroundColor: active ? 'primary.dark' : 'grey.700' },
+                      }}
+                    >
+                      {opt.label}
+                    </Box>
+                  );
+                })}
+              </Box>
+            </Box>
+          )}
             </Box>
           </Box>
-        )}
+        </Box>
+
+        {/* --- 上段中央: 縦 Divider（上段の高さ分だけ stretch、下には伸びない） --- */}
+        <Divider orientation='vertical' flexItem />
+
+        {/* --- 上段 右: Waveform/Metering トグル（上寄せ） --- */}
+        <Box sx={{ p: 1, display: 'flex', alignItems: 'flex-start' }}>
+          <Tooltip title='Display: Metering (meters) ⇔ Waveform (oscilloscope)' arrow>
+            <Box
+              onClick={toggleDisplayMode}
+              role='button'
+              aria-label='display mode'
+              sx={{
+                display: 'inline-flex',
+                height: 22,
+                borderRadius: 1,
+                border: '1px solid',
+                borderColor: 'divider',
+                overflow: 'hidden',
+                cursor: 'pointer',
+                userSelect: 'none',
+                fontSize: '0.7rem',
+                lineHeight: 1,
+              }}
+            >
+              <Box
+                sx={{
+                  px: 0.75,
+                  display: 'flex',
+                  alignItems: 'center',
+                  backgroundColor: !isWaveformMode ? 'primary.main' : 'transparent',
+                  color: !isWaveformMode ? 'background.paper' : 'text.secondary',
+                }}
+              >
+                Metering
+              </Box>
+              <Box
+                sx={{
+                  px: 0.75,
+                  display: 'flex',
+                  alignItems: 'center',
+                  backgroundColor: isWaveformMode ? 'primary.main' : 'transparent',
+                  color: isWaveformMode ? 'background.paper' : 'text.secondary',
+                }}
+              >
+                Waveform
+              </Box>
+            </Box>
+          </Tooltip>
+        </Box>
       </Box>
 
-      {/* 分割線。Mode セクションと Release セクションを視覚的に区切る */}
-      <Box sx={{ mt: 0.5, mb: 1, borderTop: '1px solid', borderColor: 'divider' }} />
+      {/* ====== 水平 Divider（外枠の全幅: 左端〜右端まで届く） ====== */}
+      <Divider />
 
-      {/* === 下段: Release（Auto/Manual + 時定数）===
+      {/* ====== 下段: Release（Auto/Manual + 時定数）======
           Single-band 時のみ機能。Multi 時はバンド別に最適化された Auto Release が
           DSP 側で強制されるため、ここは半透明 + 操作不可で無効化する。 */}
+      <Box sx={{ p: 1 }}>
       <Box
         sx={{
           display: 'flex',
@@ -231,6 +346,7 @@ export const ReleaseSection: React.FC = () => {
         <Box sx={{ display: 'flex', alignItems: 'center' }}>
           <Input
             className='block-host-shortcuts'
+            inputRef={inputElRef}
             value={displayInput}
             onChange={handleInputChange}
             onBlur={commitInput}
@@ -261,15 +377,12 @@ export const ReleaseSection: React.FC = () => {
           pointerEvents: releaseSectionDisabled ? 'none' : 'auto',
         }}
         ref={wheelRef}
+        onPointerDownCapture={handleSliderPointerDownCapture}
       >
         <Slider
           value={sliderValue}
           onChange={handleSliderChange}
-          onMouseDown={(e) => {
-            if (e.ctrlKey || e.metaKey) {
-              handleSliderClick(e);
-              return;
-            }
+          onMouseDown={() => {
             if (!isDragging) {
               setIsDragging(true);
               sliderState?.sliderDragStarted();
@@ -306,6 +419,7 @@ export const ReleaseSection: React.FC = () => {
           ]}
         />
       </Box>
+      </Box>{/* /下段 p:1 wrapper */}
     </Box>
   );
 };
