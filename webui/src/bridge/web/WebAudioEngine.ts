@@ -41,20 +41,58 @@ export class WebAudioEngine
   private sourceLoaded = false;
 
   private initialized = false;
+  private startPromise: Promise<void> | null = null;
   private initResolvers: Array<() => void> = [];
 
-  async initialize(): Promise<void>
+  /**
+   * 初回起動。**必ずユーザタップ/クリックのハンドラから同期的に**呼ぶこと。
+   *
+   * iOS WebKit は
+   *   1. `new AudioContext()` をジェスチャ同期フレーム内で実行
+   *   2. 同じフレームで `resume()` を呼ぶ（await しない）
+   *   3. 同じフレームで 1 サンプルの無音 BufferSource を start する
+   * までを満たさないと audio を unlock しない。このため本メソッドの
+   * 冒頭は最初の `await` より前にこれらを完了させる必要がある。
+   *
+   * AudioWorklet の追加・WASM のロードは非同期だが、unlock が済んでいれば
+   * ジェスチャスコープ外でも audio は鳴る。
+   */
+  startFromUserGesture(): Promise<void>
   {
-    if (this.initialized) return;
+    if (this.startPromise) return this.startPromise;
+
+    // ---- 同期フレーム: iOS 向け audio unlock ----
+    // sampleRate はハードウェア任せ。固定すると HW が 44.1k の iOS で起動失敗する。
+    const ctx = new AudioContext();
+    // await しない。ジェスチャ同期で呼んだことを iOS に示すため fire-and-forget。
+    void ctx.resume();
+
+    // 1 サンプルの無音を即 start して audio path を "primed" 状態にする。
+    const silent = ctx.createBuffer(1, 1, 22050);
+    const src = ctx.createBufferSource();
+    src.buffer = silent;
+    src.connect(ctx.destination);
+    src.start(0);
+
+    this.audioContext = ctx;
+
+    // ---- 以降は非同期（ジェスチャスコープを抜けても OK） ----
+    this.startPromise = this.completeInit();
+    return this.startPromise;
+  }
+
+  private async completeInit(): Promise<void>
+  {
+    const ctx = this.audioContext;
+    if (!ctx) return;
     try
     {
-      this.audioContext = new AudioContext({ sampleRate: 48000 });
-      await this.audioContext.audioWorklet.addModule('/worklet/dsp-processor.js');
+      await ctx.audioWorklet.addModule('/worklet/dsp-processor.js');
 
-      this.workletNode = new AudioWorkletNode(this.audioContext, 'dsp-processor', {
+      this.workletNode = new AudioWorkletNode(ctx, 'dsp-processor', {
         numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2],
       });
-      this.workletNode.connect(this.audioContext.destination);
+      this.workletNode.connect(ctx.destination);
       this.workletNode.port.onmessage = (e) => this.handleWorkletMessage(e.data);
 
       // WASM ロード
@@ -81,6 +119,7 @@ export class WebAudioEngine
   }
 
   isInitialized(): boolean { return this.initialized; }
+  isStarted(): boolean { return this.startPromise !== null; }
 
   async ensureAudioContext(): Promise<void>
   {
