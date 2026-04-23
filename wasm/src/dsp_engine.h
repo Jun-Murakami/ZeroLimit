@@ -56,6 +56,8 @@ public:
         if (numSamples <= 0) { clearSource(); return; }
         sourceL.assign(L, L + numSamples);
         sourceR.assign(R ? R : L, (R ? R : L) + numSamples); // R が null ならモノ複製
+        for (auto& s : sourceL) s = sanitizeFinite(s);
+        for (auto& s : sourceR) s = sanitizeFinite(s);
         sourceNumSamples = numSamples;
         sourceRate       = sourceSampleRate > 0.0 ? sourceSampleRate : sampleRate;
 
@@ -122,18 +124,18 @@ public:
 
     void setThresholdDb(float db) noexcept
     {
-        thresholdDb = db;
-        singleLimiter.setThresholdDb(db);
-        multiLimiter.setThresholdDb(db);
-        safetyLimiter.setThresholdDb(db);
+        thresholdDb = clampDb(db);
+        singleLimiter.setThresholdDb(thresholdDb);
+        multiLimiter.setThresholdDb(thresholdDb);
+        safetyLimiter.setThresholdDb(thresholdDb);
     }
 
-    void setOutputGainDb(float db) noexcept { outputGainDb = db; }
+    void setOutputGainDb(float db) noexcept { outputGainDb = clampDb(db); }
 
     void setReleaseMs(float ms) noexcept
     {
-        releaseMs = ms;
-        singleLimiter.setReleaseMs(ms);
+        releaseMs = std::isfinite(ms) ? std::max(0.01f, std::min(1000.0f, ms)) : 1.0f;
+        singleLimiter.setReleaseMs(releaseMs);
     }
 
     void setAutoRelease(bool enabled) noexcept
@@ -177,6 +179,7 @@ public:
 
         // --- 1) ソースから PCM を取り出す（再生中でなければゼロ） ---
         fetchSource(outL, outR, numSamples);
+        sanitizeStereo(outL, outR, numSamples);
 
         // --- 2) 入力側メーター蓄積 ---
         accumInMeters(outL, outR, numSamples);
@@ -284,9 +287,29 @@ public:
 private:
     static float amplitudeToDb(float amp, float floorDb) noexcept
     {
-        if (amp <= 0.0f) return floorDb;
+        if (! std::isfinite(amp) || amp <= 0.0f) return floorDb;
         const float db = 20.0f * std::log10(amp);
         return std::max(db, floorDb);
+    }
+
+    static float sanitizeFinite(float v) noexcept
+    {
+        return std::isfinite(v) ? v : 0.0f;
+    }
+
+    static float clampDb(float db) noexcept
+    {
+        if (! std::isfinite(db)) return 0.0f;
+        return std::max(-30.0f, std::min(0.0f, db));
+    }
+
+    static void sanitizeStereo(float* L, float* R, int n) noexcept
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            L[i] = sanitizeFinite(L[i]);
+            R[i] = sanitizeFinite(R[i]);
+        }
     }
 
     // 入力バッファに現在の再生位置から PCM をコピー。再生中でなければゼロ。

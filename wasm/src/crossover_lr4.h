@@ -8,6 +8,7 @@
 #include "biquad.h"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <vector>
 
 namespace zl_wasm {
@@ -20,10 +21,12 @@ public:
     static constexpr int   kMaxChannels   = 2;
     static constexpr double kButterQ      = 0.7071067811865476; // 1/√2
 
-    void prepare(double sr, int nch) noexcept
+    void prepare(double sr, int nch, int maxBlock) noexcept
     {
-        sampleRate  = sr > 0.0 ? sr : 44100.0;
-        numChannels = std::max(1, std::min(kMaxChannels, nch));
+        sampleRate    = sr > 0.0 ? sr : 44100.0;
+        numChannels   = std::max(1, std::min(kMaxChannels, nch));
+        preparedBlock = std::max(1, maxBlock);
+        resizeScratch(preparedBlock);
         refreshAll();
         reset();
     }
@@ -39,16 +42,18 @@ public:
     {
         currentBandCount = std::max(3, std::min(kMaxBands, numBands));
 
-        const double nyq   = sampleRate * 0.5;
-        const double safeU = nyq * 0.95;
-        double prev = 10.0;
+        const double safeU = getSafeUpperFrequency();
+        const double baseLower = std::min(10.0, safeU);
+        const double minSpacing = std::min(10.0, std::max(0.0, (safeU - baseLower) / static_cast<double>(currentBandCount)));
+        double prev = baseLower - minSpacing;
         for (int i = 0; i < currentBandCount - 1; ++i)
         {
+            const double lower = std::min(safeU, prev + minSpacing);
             double v = static_cast<double>(crossovers[i]);
-            if (v < prev)    v = prev;
-            if (v > safeU)   v = safeU;
+            if (v < lower) v = lower;
+            if (v > safeU) v = safeU;
             crossoverFreqs[i] = static_cast<float>(v);
-            prev = v + 10.0;
+            prev = v;
         }
         for (int i = currentBandCount - 1; i < kMaxCrossovers; ++i)
             crossoverFreqs[i] = crossoverFreqs[std::max(0, currentBandCount - 2)];
@@ -64,6 +69,25 @@ public:
     void processBlock(const float* inL, const float* inR, int numSamples,
                       float* const* bandOutL, float* const* bandOutR) noexcept
     {
+        if (preparedBlock > 0 && numSamples > preparedBlock)
+        {
+            int offset = 0;
+            while (offset < numSamples)
+            {
+                const int chunk = std::min(preparedBlock, numSamples - offset);
+                float* chunkOutL[kMaxBands];
+                float* chunkOutR[kMaxBands];
+                for (int b = 0; b < kMaxBands; ++b)
+                {
+                    chunkOutL[b] = bandOutL[b] + offset;
+                    chunkOutR[b] = bandOutR[b] + offset;
+                }
+                processBlock(inL + offset, inR + offset, chunk, chunkOutL, chunkOutR);
+                offset += chunk;
+            }
+            return;
+        }
+
         const int N  = currentBandCount;
         const int nc = numChannels;
 
@@ -129,8 +153,9 @@ private:
         void setCoefficients(double sr, float freq) noexcept
         {
             Biquad refLp, refHp;
-            Biquad::makeLowPass (refLp, sr, freq, kButterQ);
-            Biquad::makeHighPass(refHp, sr, freq, kButterQ);
+            const float safeFreq = clampFrequencyForCoefficients(sr, freq);
+            Biquad::makeLowPass (refLp, sr, safeFreq, kButterQ);
+            Biquad::makeHighPass(refHp, sr, safeFreq, kButterQ);
             for (int ch = 0; ch < kMaxChannels; ++ch)
             {
                 for (int s = 0; s < 2; ++s)
@@ -168,6 +193,23 @@ private:
         }
     };
 
+    static float clampFrequencyForCoefficients(double sr, float freq) noexcept
+    {
+        const double nyq = (sr > 0.0 ? sr : 44100.0) * 0.5;
+        const double upper = std::max(1.0e-3, nyq * 0.95);
+        const double lower = std::min(10.0, upper);
+        double v = std::isfinite(freq) ? static_cast<double>(freq) : lower;
+        if (v < lower) v = lower;
+        if (v > upper) v = upper;
+        return static_cast<float>(v);
+    }
+
+    double getSafeUpperFrequency() const noexcept
+    {
+        const double nyq = sampleRate * 0.5;
+        return std::max(1.0e-3, nyq * 0.95);
+    }
+
     void refreshAll() noexcept
     {
         for (int i = 0; i < kMaxCrossovers; ++i)
@@ -189,8 +231,21 @@ private:
         if (static_cast<int>(v.size()) < n) v.resize(static_cast<size_t>(n));
     }
 
+    void resizeScratch(int n)
+    {
+        restL.resize(static_cast<size_t>(n));
+        restR.resize(static_cast<size_t>(n));
+        rawL .resize(static_cast<size_t>(n));
+        rawR .resize(static_cast<size_t>(n));
+        tmpAL.resize(static_cast<size_t>(n));
+        tmpAR.resize(static_cast<size_t>(n));
+        tmpBL.resize(static_cast<size_t>(n));
+        tmpBR.resize(static_cast<size_t>(n));
+    }
+
     double sampleRate  = 44100.0;
     int    numChannels = 2;
+    int    preparedBlock = 0;
     int    currentBandCount = 3;
     std::array<float, kMaxCrossovers> crossoverFreqs{ 120.0f, 5000.0f, 15000.0f, 15000.0f };
 

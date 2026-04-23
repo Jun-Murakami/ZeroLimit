@@ -48,7 +48,9 @@ public:
         const bool arc = autoReleaseEnabled;
         for (int i = 0; i < numSamples; ++i)
         {
-            const float a = std::max(std::abs(L[i]), std::abs(R[i]));
+            const float inL = sanitizeFinite(L[i]);
+            const float inR = sanitizeFinite(R[i]);
+            const float a = std::max(std::abs(inL), std::abs(inR));
             float target = 1.0f;
             if (a > thresholdLin && a > 0.0f)
                 target = thresholdLin / a;
@@ -60,14 +62,19 @@ public:
             else                          currentGainSlow = target + (currentGainSlow - target) * slowReleaseCoeff;
 
             const float applied = arc ? std::min(currentGain, currentGainSlow) : currentGain;
-            L[i] *= applied;
-            R[i] *= applied;
+            L[i] = inL * applied;
+            R[i] = inR * applied;
             if (applied < minG) minG = applied;
         }
         return minG;
     }
 
 private:
+    static float sanitizeFinite(float v) noexcept
+    {
+        return std::isfinite(v) ? v : 0.0f;
+    }
+
     void updateCoeffs() noexcept
     {
         const double tauFast = static_cast<double>(releaseMs)     * 0.001 * sampleRate;

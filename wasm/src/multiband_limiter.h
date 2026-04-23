@@ -24,7 +24,7 @@ public:
         preparedChannels  = std::max(1, nch);
         preparedBlock     = std::max(1, maxBlock);
 
-        crossover.prepare(sampleRate, preparedChannels);
+        crossover.prepare(sampleRate, preparedChannels, preparedBlock);
 
         for (auto& lim : bandLimiters)
             lim.prepare(sampleRate);
@@ -73,9 +73,23 @@ public:
     // ステレオ in-place 処理。戻り値はバンド間の最小ゲイン（= 最大リダクション）。
     float processStereoInPlace(float* L, float* R, int numSamples) noexcept
     {
+        if (preparedBlock > 0 && numSamples > preparedBlock)
+        {
+            float minG = 1.0f;
+            int offset = 0;
+            while (offset < numSamples)
+            {
+                const int chunk = std::min(preparedBlock, numSamples - offset);
+                const float g = processStereoInPlace(L + offset, R + offset, chunk);
+                if (g < minG) minG = g;
+                offset += chunk;
+            }
+            return minG;
+        }
+
         const int N = getNumBands();
 
-        // バッファが足りなければ再確保（WASM 内では stop-the-world 的な確保だが稀）
+        // prepare 前の直接呼び出しだけに備えた防御。通常経路では事前確保済み。
         for (int i = 0; i < N; ++i)
         {
             if (static_cast<int>(bandBufL[i].size()) < numSamples) bandBufL[i].resize(numSamples);
