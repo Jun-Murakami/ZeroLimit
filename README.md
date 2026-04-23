@@ -2,6 +2,9 @@
 
 A **zero-latency** brickwall limiter for broadcast, streaming, and music mastering. Built with JUCE + WebView (Vite / React 19 / MUI 7). Ships as VST3 / AU / AAX / Standalone.
 
+You can find the demo site running on WebAssembly here.
+https://zerolimit-demo.web.app/
+
 ## Highlights
 
 - **0-sample latency** — no lookahead. Instant attack, time-constant release. Suitable for live/broadcast where monitoring delay is unacceptable.
