@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, Divider, FormControlLabel, Slider, Switch, Tooltip, Typography, Input } from '@mui/material';
+import { Box, Divider, FormControlLabel, Slider, Switch, Tooltip, Typography, Input, useMediaQuery } from '@mui/material';
 import { useJuceComboBoxIndex, useJuceSliderValue, useJuceToggleValue } from '../hooks/useJuceParam';
 import { useFineAdjustPointer } from '../hooks/useFineAdjustPointer';
 import { useNumberInputAdjust } from '../hooks/useNumberInputAdjust';
@@ -34,6 +34,13 @@ const normToMs = (t: number): number => {
 };
 
 export const ReleaseSection: React.FC = () => {
+  // 狭い viewport（web デモをスマホ等で開いた場合）ではトップ行に
+  //  Multi-band + Bands + Waveform/Metering トグルが詰まるので縦スタックに切り替える。
+  //  プラグイン（WebView）側のウィンドウ最小幅は kMinWidth=447px。Paper の左右 padding(32px) を
+  //  引いた内部幅 415px で実測すると Multi-band + Bands + Toggle は一行に収まる（~361px）。
+  //  よってしきい値は 440px（プラグイン最小を上回り、スマホ 375/390 で narrow 判定）。
+  const isNarrow = useMediaQuery('(max-width: 440px)');
+
   const { value: releaseMs, state: sliderState, setNormalised } = useJuceSliderValue('RELEASE_MS');
   const { value: autoRelease, setValue: setAutoReleaseJuce } = useJuceToggleValue('AUTO_RELEASE', true);
   // Single / Multi バンドモード。Multi 時はこのセクション全体が効かなくなる（強制 Auto Release）。
@@ -197,8 +204,9 @@ export const ReleaseSection: React.FC = () => {
         flexDirection: 'column',
       }}
     >
-      {/* ====== 上段: 左 = バンドモード（Single/Multi + Bands）、右 = 表示切替（Metering/Waveform） ====== */}
-      <Box sx={{ display: 'flex', alignItems: 'stretch' }}>
+      {/* ====== 上段: 左 = バンドモード（Single/Multi + Bands）、右 = 表示切替（Metering/Waveform） ======
+          スマホなど狭い viewport では縦スタックに切り替えて詰まりを回避する。 */}
+      <Box sx={{ display: 'flex', flexDirection: isNarrow ? 'column' : 'row', alignItems: 'stretch' }}>
         {/* --- 上段 左 --- */}
         <Box sx={{ flex: 1, minWidth: 0, p: 1 }}>
           {/* === Single/Multi バンドモード切替 + Multi 時のバンド数 ===
@@ -267,11 +275,19 @@ export const ReleaseSection: React.FC = () => {
           </Box>
         </Box>
 
-        {/* --- 上段中央: 縦 Divider（上段の高さ分だけ stretch、下には伸びない） --- */}
-        <Divider orientation='vertical' flexItem />
+        {/* --- 上段中央: 狭い時は水平 Divider、広い時は縦 Divider --- */}
+        {isNarrow
+          ? <Divider orientation='horizontal' />
+          : <Divider orientation='vertical' flexItem />}
 
-        {/* --- 上段 右: Waveform/Metering トグル（上寄せ） --- */}
-        <Box sx={{ p: 1, display: 'flex', alignItems: 'flex-start' }}>
+        {/* --- 上段 右: Waveform/Metering トグル
+               desktop では上寄せ + 左詰め / narrow では右寄せ（行末） */}
+        <Box sx={{
+          p: 1,
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: isNarrow ? 'flex-end' : 'flex-start',
+        }}>
           <Tooltip title='Display: Metering (meters) ⇔ Waveform (oscilloscope)' arrow>
             <Box
               onClick={toggleDisplayMode}
