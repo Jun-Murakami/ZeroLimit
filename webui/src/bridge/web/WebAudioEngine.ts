@@ -47,15 +47,17 @@ export class WebAudioEngine
   /**
    * 初回起動。**必ずユーザタップ/クリックのハンドラから同期的に**呼ぶこと。
    *
-   * iOS WebKit は
+   * iOS WebKit の unlock 条件:
    *   1. `new AudioContext()` をジェスチャ同期フレーム内で実行
-   *   2. 同じフレームで `resume()` を呼ぶ（await しない）
-   *   3. 同じフレームで 1 サンプルの無音 BufferSource を start する
-   * までを満たさないと audio を unlock しない。このため本メソッドの
-   * 冒頭は最初の `await` より前にこれらを完了させる必要がある。
+   *   2. 同じフレームで `resume()` の Promise を発行（fire-and-forget ではなく
+   *      戻り Promise を保持して重い init より前に await する）
+   *   3. 同じフレームで無音 BufferSource を start する。1 サンプルでは
+   *      unlock にカウントされない iOS 版があるため、ネイティブ sampleRate
+   *      で 128 サンプル以上を再生する
    *
-   * AudioWorklet の追加・WASM のロードは非同期だが、unlock が済んでいれば
-   * ジェスチャスコープ外でも audio は鳴る。
+   * 重い init（WASM / sample.mp3 ロード）に入る前に resume の完了を待つことで、
+   * ジェスチャ失効後に `ensureAudioContext()` が再 resume を試みて iOS に黙殺
+   * されるケースを回避する。
    */
   startFromUserGesture(): Promise<void>
   {
@@ -64,20 +66,28 @@ export class WebAudioEngine
     // ---- 同期フレーム: iOS 向け audio unlock ----
     // sampleRate はハードウェア任せ。固定すると HW が 44.1k の iOS で起動失敗する。
     const ctx = new AudioContext();
-    // await しない。ジェスチャ同期で呼んだことを iOS に示すため fire-and-forget。
-    void ctx.resume();
+    this.audioContext = ctx;
 
-    // 1 サンプルの無音を即 start して audio path を "primed" 状態にする。
-    const silent = ctx.createBuffer(1, 1, 22050);
+    // ジェスチャ同期で resume を発行。戻り Promise は捨てず、重い init より
+    // 前に await する（fire-and-forget だと古い iOS で昇格しない実例あり）。
+    const resumed = ctx.resume();
+
+    // 1 サンプル (22050 Hz) だと unlock にカウントされない iOS 版があるため、
+    // ネイティブ sampleRate で 128 サンプル分の無音を prime する。
+    const primeFrames = 128;
+    const silent = ctx.createBuffer(1, primeFrames, ctx.sampleRate);
     const src = ctx.createBufferSource();
     src.buffer = silent;
     src.connect(ctx.destination);
     src.start(0);
 
-    this.audioContext = ctx;
-
     // ---- 以降は非同期（ジェスチャスコープを抜けても OK） ----
-    this.startPromise = this.completeInit();
+    this.startPromise = (async () => {
+      // resume が先に完了していないと worklet 接続後も context が suspended
+      // のまま出力が捨てられる。失敗時は completeInit 側の動作に任せる。
+      try { await resumed; } catch { /* ignore */ }
+      await this.completeInit();
+    })();
     return this.startPromise;
   }
 
