@@ -43,6 +43,9 @@ function App() {
 
   // 1200px 以上のときは右に常時表示ドロワーを置くので外枠の右パディングを拡大する
   const wideDrawerDocked = useMediaQuery(MENU_WIDE_QUERY) && IS_WEB_MODE;
+  // 狭い viewport（プラグインを縮めた / スマホデモ）では GR バー幅を半分にして
+  //  メーター領域を広く取れるようにする（しきい値は ReleaseSection と揃える）。
+  const isNarrow = useMediaQuery('(max-width: 440px)');
 
   // メーター現在値（バー描画用）
   const [inL, setInL] = useState(MIN_DB);
@@ -328,18 +331,22 @@ function App() {
   const meterAndFaderHeight = Math.max(80, Math.floor(mainSize.height - 78));
 
   //   中央メーター領域の幅 = 全体幅 - フェーダー幅×2 (60×2) - grid の gap 2(=16)×2 = 全体 -152
-  //   そこから GR バー幅(48) と IN/OUT 間のセンターギャップ(0.25×2 = 4) を差し引いて 2 等分。
+  //   そこから GR バー幅と IN/OUT 間のセンターギャップ(0.25×2 = 4) を差し引いて 2 等分。
+  //   GR バーは通常 48px、narrow（max-width 440px）時は半分の 24px（こちらは固定値）。
+  //   ※ IN/OUT 列・L/R バーの最小値クランプは外してあり、ウィンドウを縮めるとそのまま縮む。
+  //     負値防止のため Math.max(0, ...) のみ残している。
+  const grBarWidth = isNarrow ? 24 : 48;
   const meterAreaWidth = Math.max(0, mainSize.width - 60 * 2 - 16 * 2);
-  const meterColumnWidth = Math.max(52, Math.floor((meterAreaWidth - 48 - 4) / 2));
+  const meterColumnWidth = Math.max(0, Math.floor((meterAreaWidth - grBarWidth - 4) / 2));
   //   L/R ペアの各バー幅（gap 0.25 = 2px を引いて半分）
-  const levelBarWidth = Math.max(24, Math.floor((meterColumnWidth - 2) / 2));
+  const levelBarWidth = Math.max(0, Math.floor((meterColumnWidth - 2) / 2));
 
   // Waveform モード時のレイアウト：
   //   [Waveform ... | 薄 GR | 薄 OUT(merged)]
   //   右側の薄いバー 2 本分と gap を確保し、残りを波形キャンバスに割り当てる。
   const thinBarWidth = 18;
   const thinGap = 2;
-  const waveformWidth = Math.max(60, meterAreaWidth - thinBarWidth * 2 - thinGap * 2);
+  const waveformWidth = Math.max(0, meterAreaWidth - thinBarWidth * 2 - thinGap * 2);
 
   // リサイズハンドル（Standalone 用）
   const dragState = useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null);
@@ -352,8 +359,8 @@ function App() {
     const dx = e.clientX - dragState.current.startX;
     const dy = e.clientY - dragState.current.startY;
     // C++ 側 PluginEditor の kMinWidth / kMinHeight と合わせる
-    const w = Math.max(447, dragState.current.startW + dx);
-    const h = Math.max(390, dragState.current.startH + dy);
+    const w = Math.max(340, dragState.current.startW + dx);
+    const h = Math.max(400, dragState.current.startH + dy);
     if (!window.__resizeRAF) {
       window.__resizeRAF = requestAnimationFrame(() => {
         window.__resizeRAF = 0;
@@ -427,13 +434,28 @@ function App() {
             プラグインカードの外に配置する。プラグイン本体の機能ではない操作系なので。 */}
         {IS_WEB_MODE && (
           <Box sx={{ width: '100%', maxWidth: 600 }}>
+            <Typography
+              variant='caption'
+              sx={{
+                display: 'block',
+                px: 1.5,
+                color: 'text.secondary',
+                fontWeight: 600,
+                letterSpacing: 1,
+                textTransform: 'uppercase',
+                fontSize: '0.65rem',
+                mb: 0.25,
+              }}
+            >
+              Input
+            </Typography>
             <WebTransportBar />
           </Box>
         )}
 
         {/* Web モード時はプラグイン UI をカード化して幅固定・影つきに。
             プラグインモードでは透過（display: 'contents'）して従来のフレックス挙動を維持。
-            最小幅は plugin 版の kMinWidth=447 に揃える（下段の Bands + トグルが収まる幅）。 */}
+            プラグインの最小幅 kMinWidth=340。440px 未満では下段がコンパクトレイアウト（narrow）に切り替わる。 */}
         <Box
           sx={IS_WEB_MODE
             ? {
@@ -505,7 +527,7 @@ function App() {
             <Box
               sx={{
                 position: 'absolute',
-                top: 0,
+                mt: -0.5,
                 left: '50%',
                 transform: 'translateX(-50%)',
                 zIndex: 2,
@@ -525,7 +547,7 @@ function App() {
                     minWidth: 'auto',
                     px: 1,
                     py: 0.2,
-                    height: 24,
+                    height: 18,
                     textTransform: 'none',
                     letterSpacing: 0.5,
                     border: '2px solid',
@@ -693,7 +715,7 @@ function App() {
 
                 {/* GR */}
                 <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  <GainReductionMeterBar grDb={grDb} height={meterAndFaderHeight} />
+                  <GainReductionMeterBar grDb={grDb} width={grBarWidth} height={meterAndFaderHeight} />
                   <Tooltip title='Reset Hold'>
                     <Box
                       onClick={resetGrHold}
@@ -707,7 +729,7 @@ function App() {
                         userSelect: 'none',
                       }}
                     >
-                      <Typography variant='caption' sx={{ fontSize: '10px', width: 48, textAlign: 'center', lineHeight: 1 }}>
+                      <Typography variant='caption' sx={{ fontSize: '10px', width: grBarWidth, textAlign: 'center', lineHeight: 1 }}>
                         -{grHold.toFixed(1)}
                       </Typography>
                     </Box>

@@ -11,8 +11,10 @@ class ZeroLimitAudioProcessorEditor : public juce::AudioProcessorEditor,
 public:
     // ウィンドウの最小・最大サイズ。全てのリサイズ経路（OS 四辺・内蔵リサイザ・
     // WebUI オーバーレイ）で同じ値を使う。
-    static constexpr int kMinWidth  = 447;
-    static constexpr int kMinHeight = 390;
+    // 最小 340×400: ノートPC のような小画面でも収まるサイズ。これ以下では各メーターが
+    // つぶれて読み取れなくなるため、UI 側で個別クランプを置かず本値で一括制限する。
+    static constexpr int kMinWidth  = 340;
+    static constexpr int kMinHeight = 400;
     static constexpr int kMaxWidth  = 2560;
     static constexpr int kMaxHeight = 1440;
 

@@ -294,8 +294,8 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
     resizer->setAlwaysOnTop(true);
 
     // ホスト側の最小画面表示量
-    if (auto* constrainer = getConstrainer())
-        constrainer->setMinimumOnscreenAmounts(50, 50, 50, 50);
+    if (auto* hostConstrainer = getConstrainer())
+        hostConstrainer->setMinimumOnscreenAmounts(50, 50, 50, 50);
 
     if (useLocalDevServer)
         webView.goToURL(LOCAL_DEV_SERVER_ADDRESS);

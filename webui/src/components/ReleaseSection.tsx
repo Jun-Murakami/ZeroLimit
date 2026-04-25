@@ -34,11 +34,13 @@ const normToMs = (t: number): number => {
 };
 
 export const ReleaseSection: React.FC = () => {
-  // 狭い viewport（web デモをスマホ等で開いた場合）ではトップ行に
+  // 狭い viewport（web デモをスマホ等 / プラグインを縮めた場合）ではトップ行に
   //  Multi-band + Bands + Waveform/Metering トグルが詰まるので縦スタックに切り替える。
-  //  プラグイン（WebView）側のウィンドウ最小幅は kMinWidth=447px。Paper の左右 padding(32px) を
-  //  引いた内部幅 415px で実測すると Multi-band + Bands + Toggle は一行に収まる（~361px）。
-  //  よってしきい値は 440px（プラグイン最小を上回り、スマホ 375/390 で narrow 判定）。
+  //  しきい値 440px。プラグインの最小幅 kMinWidth=340 では常に narrow 側に倒れる。
+  //  narrow 時のレイアウト（公式仕様）:
+  //    [上] Metering/Waveform トグル（中央寄せ）
+  //    [中] Single/Multi-band スイッチ + Bands セレクタ（横並び 1 行）
+  //    [下] Release セクション
   const isNarrow = useMediaQuery('(max-width: 440px)');
 
   const { value: releaseMs, state: sliderState, setNormalised } = useJuceSliderValue('RELEASE_MS');
@@ -204,19 +206,15 @@ export const ReleaseSection: React.FC = () => {
         flexDirection: 'column',
       }}
     >
-      {/* ====== 上段: 左 = バンドモード（Single/Multi + Bands）、右 = 表示切替（Metering/Waveform） ======
-          スマホなど狭い viewport では縦スタックに切り替えて詰まりを回避する。 */}
-      <Box sx={{ display: 'flex', flexDirection: isNarrow ? 'column' : 'row', alignItems: 'stretch' }}>
-        {/* --- 上段 左 --- */}
-        <Box sx={{ flex: 1, minWidth: 0, p: 1 }}>
-          {/* === Single/Multi バンドモード切替 + Multi 時のバンド数 ===
-              各バンド数の crossover とバンド別時定数は DSP 側で固定（ゼロコンフィグ）:
-                3-band: 120 Hz / 5 kHz                 （放送、声を Mid に閉じ込め）← 既定
-                4-band: 150 Hz / 5 kHz / 15 kHz        （Steinberg 準拠）
-                5-band: 80 / 250 / 1k / 5k Hz          （UA 準拠、音楽マスタリング志向） */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1, minWidth: 0 }}>
-              <FormControlLabel
+      {/* ====== 上段: バンドモード切替 + 表示モード切替 ======
+          各バンド数の crossover とバンド別時定数は DSP 側で固定（ゼロコンフィグ）:
+            3-band: 120 Hz / 5 kHz                 （放送、声を Mid に閉じ込め）← 既定
+            4-band: 150 Hz / 5 kHz / 15 kHz        （Steinberg 準拠）
+            5-band: 80 / 250 / 1k / 5k Hz          （UA 準拠、音楽マスタリング志向）
+          narrow 時は Metering/Waveform を最上段センタリング、Single/Multi を 2 段（Switch + Bands）に分離。 */}
+      {(() => {
+        const singleMultiSwitch = (
+          <FormControlLabel
             control={
               <Switch
                 checked={multiMode}
@@ -231,63 +229,50 @@ export const ReleaseSection: React.FC = () => {
               '& .MuiFormControlLabel-label': { fontSize: '0.875rem', fontWeight: multiMode ? 600 : 400 },
             }}
           />
-          {multiMode && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              {/* 「Bands」ラベル。数字だけだと何の値か不明瞭なので明示する。 */}
-              <Typography variant='caption' sx={{ fontSize: '0.75rem', color: 'text.secondary', mr: 0.5 }}>
-                Bands
-              </Typography>
-              {/* バンド数切替（3 / 4 / 5） */}
-              <Box sx={{ display: 'flex', border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
-                {[
-                  { label: '3', idx: 0 },
-                  { label: '4', idx: 1 },
-                  { label: '5', idx: 2 },
-                ].map((opt) => {
-                  const active = bandCountIdx === opt.idx;
-                  return (
-                    <Box
-                      key={opt.idx}
-                      onClick={() => setBandCountIdx(opt.idx)}
-                      sx={{
-                        px: 1,
-                        py: 0.15,
-                        fontSize: '0.72rem',
-                        fontWeight: active ? 600 : 400,
-                        cursor: 'pointer',
-                        backgroundColor: active ? 'primary.main' : 'transparent',
-                        color: active ? 'background.paper' : 'text.secondary',
-                        minWidth: 22,
-                        textAlign: 'center',
-                        userSelect: 'none',
-                        transition: 'background-color 80ms',
-                        '&:hover': { backgroundColor: active ? 'primary.dark' : 'grey.700' },
-                      }}
-                    >
-                      {opt.label}
-                    </Box>
-                  );
-                })}
-              </Box>
-            </Box>
-          )}
+        );
+
+        const bandsBlock = multiMode ? (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            {/* 「Bands」ラベル。数字だけだと何の値か不明瞭なので明示する。 */}
+            <Typography variant='caption' sx={{ fontSize: '0.75rem', color: 'text.secondary', mr: 0.5 }}>
+              Bands
+            </Typography>
+            {/* バンド数切替（3 / 4 / 5） */}
+            <Box sx={{ display: 'flex', border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
+              {[
+                { label: '3', idx: 0 },
+                { label: '4', idx: 1 },
+                { label: '5', idx: 2 },
+              ].map((opt) => {
+                const active = bandCountIdx === opt.idx;
+                return (
+                  <Box
+                    key={opt.idx}
+                    onClick={() => setBandCountIdx(opt.idx)}
+                    sx={{
+                      px: 1,
+                      py: 0.15,
+                      fontSize: '0.72rem',
+                      fontWeight: active ? 600 : 400,
+                      cursor: 'pointer',
+                      backgroundColor: active ? 'primary.main' : 'transparent',
+                      color: active ? 'background.paper' : 'text.secondary',
+                      minWidth: 22,
+                      textAlign: 'center',
+                      userSelect: 'none',
+                      transition: 'background-color 80ms',
+                      '&:hover': { backgroundColor: active ? 'primary.dark' : 'grey.700' },
+                    }}
+                  >
+                    {opt.label}
+                  </Box>
+                );
+              })}
             </Box>
           </Box>
-        </Box>
+        ) : null;
 
-        {/* --- 上段中央: 狭い時は水平 Divider、広い時は縦 Divider --- */}
-        {isNarrow
-          ? <Divider orientation='horizontal' />
-          : <Divider orientation='vertical' flexItem />}
-
-        {/* --- 上段 右: Waveform/Metering トグル
-               desktop では上寄せ + 左詰め / narrow では右寄せ（行末） */}
-        <Box sx={{
-          p: 1,
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: isNarrow ? 'flex-end' : 'flex-start',
-        }}>
+        const displayModeToggle = (
           <Tooltip title='Display: Metering (meters) ⇔ Waveform (oscilloscope)' arrow>
             <Box
               onClick={toggleDisplayMode}
@@ -330,8 +315,38 @@ export const ReleaseSection: React.FC = () => {
               </Box>
             </Box>
           </Tooltip>
-        </Box>
-      </Box>
+        );
+
+        if (isNarrow) {
+          // narrow: [Display モード（センタリング）] / [Single/Multi + Bands（横並び 1 行）]
+          return (
+            <>
+              <Box sx={{ p: 1, display: 'flex', justifyContent: 'center' }}>
+                {displayModeToggle}
+              </Box>
+              <Divider />
+              <Box sx={{ p: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                {singleMultiSwitch}
+                {bandsBlock}
+              </Box>
+            </>
+          );
+        }
+
+        // wide: [Single/Multi + Bands] | [Display モード]
+        return (
+          <Box sx={{ display: 'flex', flexDirection: 'row', alignItems: 'stretch' }}>
+            <Box sx={{ flex: 1, minWidth: 0, p: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+              {singleMultiSwitch}
+              {bandsBlock}
+            </Box>
+            <Divider orientation='vertical' flexItem />
+            <Box sx={{ p: 1, display: 'flex', alignItems: 'flex-start' }}>
+              {displayModeToggle}
+            </Box>
+          </Box>
+        );
+      })()}
 
       {/* ====== 水平 Divider（外枠の全幅: 左端〜右端まで届く） ====== */}
       <Divider />
