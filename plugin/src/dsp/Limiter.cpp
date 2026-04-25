@@ -28,7 +28,12 @@ void ZeroLatencyLimiter::setThresholdDb(float thresholdDb)
 {
     // -80dB で実質オフ相当の下限を設定。上限は 0dB
     const float clamped = std::max(-80.0f, std::min(0.0f, thresholdDb));
-    thresholdLin = std::pow(10.0f, clamped / 20.0f);
+    // 出力サンプルが 1.0f ジャストに到達して DAW のクリップ判定 (|x|>=1.0) を踏むのを防ぐ。
+    // ≈ -0.0000087 dB、SoundForge 等の TruePeak 表示 (0.001dB 解像度) でも -0.000 のまま。
+    // nextafter(1.0f,0.0f) は |sample|*(t/|sample|) の丸めで 1.0f に戻り得るため、
+    // コンパウンド誤差に耐える ~17 ULP のリテラルマージンを採用する。
+    constexpr float kCeilingMargin = 1.0f - 1.0e-6f;
+    thresholdLin = std::pow(10.0f, clamped / 20.0f) * kCeilingMargin;
 }
 
 void ZeroLatencyLimiter::setReleaseMs(float ms)
