@@ -1,6 +1,6 @@
 # ZeroLimit
 
-A **zero-latency** brickwall limiter for broadcast, streaming, and music mastering. Built with JUCE + WebView (Vite / React 19 / MUI 7). Ships as VST3 / AU / AAX / Standalone.
+A **zero-latency** brickwall limiter for broadcast, streaming, and music mastering. Built with JUCE + WebView (Vite / React 19 / MUI 7). Ships as **VST3 / AU / AAX / Standalone** on Windows / macOS and **VST3 / LV2 / CLAP / Standalone** on Linux.
 
 You can find the demo site running on WebAssembly here.
 https://zerolimit-demo.web.app/
@@ -16,7 +16,7 @@ https://zerolimit-demo.web.app/
 - **Five-mode metering** — Input L/R, Gain Reduction, Output L/R, with Peak / RMS / Momentary LKFS (ITU-R BS.1770-4) switchable.
 - **Waveform display mode** — Pro-L style oscilloscope (~7 sec scrollback): input envelope, threshold line, and per-sample gain-reduction reflection. Switch on the fly between meter view and waveform view.
 - **Link** — Threshold ⇔ Output Gain move together while preserving their relative offset.
-- **Formats**: VST3, AU (macOS), AAX (when the SDK is present), Standalone.
+- **Formats**: VST3, AU (macOS), AAX (when the SDK is present), LV2 / CLAP (Linux), Standalone.
 
 ## Screenshot
 
@@ -29,8 +29,10 @@ The plugin window is resizable (minimum 447 × 390, default 453 × 470). Faders,
 - C++17 toolchain
   - Windows: Visual Studio 2022 with C++ workload
   - macOS: Xcode 14+
+  - Linux: gcc 13+ / clang + the apt packages listed under [Building on Linux](#building-on-linux)
 - Node.js 18+ and npm (for the WebUI)
 - JUCE (included as a submodule)
+- `clap-juce-extensions` (also a git submodule, used only for the Linux CLAP target)
 - Optional: AAX SDK for Pro Tools builds (drop at `aax-sdk/`)
 - Optional: Inno Setup 6 for the Windows installer
 
@@ -52,7 +54,36 @@ powershell -ExecutionPolicy Bypass -File build_windows.ps1 -Configuration Releas
 
 # 3. Build (macOS)
 ./build_macos.zsh
+
+# 4. Build (Linux — see "Building on Linux" below)
+bash build_linux.sh
 ```
+
+### Building on Linux
+
+Tested on **WSL2 Ubuntu 24.04**, but should work on any modern glibc-based distro with `webkit2gtk-4.1` available.
+
+```bash
+sudo apt update
+sudo apt install -y \
+  build-essential pkg-config cmake ninja-build git \
+  libasound2-dev libjack-jackd2-dev libcurl4-openssl-dev \
+  libfreetype-dev libfontconfig1-dev \
+  libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+  libxinerama-dev libxrandr-dev libxrender-dev \
+  libwebkit2gtk-4.1-dev libglu1-mesa-dev mesa-common-dev libgtk-3-dev
+
+git submodule update --init --recursive   # JUCE + clap-juce-extensions
+bash build_linux.sh                        # Release VST3 / LV2 / CLAP / Standalone + zip
+```
+
+Output:
+
+- Build artefacts: `build-linux/plugin/ZeroLimit_artefacts/Release/{VST3,LV2,CLAP,Standalone}/`
+- Auto-installed: `~/.vst3/ZeroLimit.vst3`, `~/.lv2/ZeroLimit.lv2`, `~/.clap/ZeroLimit.clap`
+- Distribution zip: `releases/<VERSION>/ZeroLimit_<VERSION>_Linux_VST3_LV2_CLAP_Standalone.zip`
+
+LV2 and CLAP are gated behind `if(UNIX AND NOT APPLE)` in CMake, so existing Windows / macOS release flows are unaffected. AU and AAX are skipped on Linux as expected.
 
 ### Manual CMake build (for development)
 
