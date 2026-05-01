@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Jun Murakami
 // JUCE を使わないゼロレイテンシー・ブリックウォール・リミッター（WASM 用）。
 // プラグイン側の ZeroLatencyLimiter (plugin/src/dsp/Limiter.*) と同じ音の挙動を持つ。
 #pragma once

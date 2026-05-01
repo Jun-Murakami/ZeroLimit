@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Jun Murakami
 /**
  * ZeroLimit WASM AudioWorkletProcessor.
  * すべてのオーディオ処理（再生・リミッタ・メーター）は C++ WASM の dsp_process_block() に委譲。

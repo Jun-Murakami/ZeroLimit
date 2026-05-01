@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Jun Murakami
 /**
  * juceBridge の Web 互換実装。
  * App.tsx / ReleaseSection など既存コンポーネントの `juceBridge.addEventListener(...)` 等をそのまま動かすための薄いラッパー。

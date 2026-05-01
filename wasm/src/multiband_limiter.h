@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Jun Murakami
 // WASM 用マルチバンド・リミッター。3/4/5 バンドを動的切替。
 // プラグイン側 MultibandLimiter と同じクロスオーバー周波数・時定数を使う。
 #pragma once

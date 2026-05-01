@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Jun Murakami
 // WASM 用 LR4 IIR クロスオーバー（3 / 4 / 5 バンド可変）。
 // プラグイン側 CrossoverLR4 と同じトポロジ・位相アライメントを、純 C++ + 内製 biquad で再実装。
 //
