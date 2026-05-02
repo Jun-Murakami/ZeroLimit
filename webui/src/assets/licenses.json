@@ -871,7 +871,7 @@
     "path": "/Users/jun/SourceCode/JUCE/ZeroLimit/webui/node_modules/cosmiconfig/node_modules/yaml",
     "licenseFile": "/Users/jun/SourceCode/JUCE/ZeroLimit/webui/node_modules/cosmiconfig/node_modules/yaml/LICENSE"
   },
-  "zerolimit-webui@1.1.2": {
+  "zerolimit-webui@1.1.3": {
     "licenses": "UNLICENSED",
     "private": true,
     "path": "/Users/jun/SourceCode/JUCE/ZeroLimit/webui"
