@@ -100,23 +100,29 @@ export const WaveformView: React.FC<WaveformViewProps> = ({
   const bufferLen = Math.max(16, Math.round(sliceHz * seconds));
   const peaksRef = useRef<Float32Array | null>(null);
   const grDbRef  = useRef<Float32Array | null>(null);
-  if (peaksRef.current === null || peaksRef.current.length !== bufferLen) {
-    peaksRef.current = new Float32Array(bufferLen);
-    grDbRef.current  = new Float32Array(bufferLen);
-  }
   // 書き込み head は ring index で保持（毎回シフトするのは O(n) で高コストなため）。
   const writeIdxRef = useRef<number>(0);
 
-  // 最新の threshold を render 中 ref で保持（draw ループから参照）
+  // ring buffer の確保は render 中ではなく layout effect で行う（render 中の ref 書き込みを避ける）。
+  //  初回 & bufferLen 変化時に確保し直し、write head もリセットする。
+  //  描画 layout effect より前に宣言しているので、確保 → 初回描画の順で実行される。
+  useLayoutEffect(() => {
+    peaksRef.current = new Float32Array(bufferLen);
+    grDbRef.current  = new Float32Array(bufferLen);
+    writeIdxRef.current = 0;
+  }, [bufferLen]);
+
+  // 最新の threshold / isResizing / size を draw ループから参照するための Latest Ref。
+  //  ref 書き込みは render 中ではなく effect で行う（concurrent 安全）。
   const thresholdRef = useRef<number>(thresholdDb);
-  thresholdRef.current = thresholdDb;
-
-  // isResizing を ref で保持（drawRef から参照して描画スキップ判定）
   const isResizingRef = useRef<boolean>(isResizing);
-  isResizingRef.current = isResizing;
-
   const sizeRef = useRef<{ w: number; h: number }>({ w: width, h: height });
-  sizeRef.current = { w: width, h: height };
+  useEffect(() => {
+    isResizingRef.current = isResizing;
+  }, [isResizing]);
+  useEffect(() => {
+    sizeRef.current = { w: width, h: height };
+  }, [width, height]);
 
   // canvas の描画処理
   const drawRef = useRef<() => void>(() => {});
@@ -350,7 +356,9 @@ export const WaveformView: React.FC<WaveformViewProps> = ({
   }, []);
 
   // threshold だけが変わっても線位置は即座に変わってほしいので手動再描画。
+  //  Latest Ref の同期もここで行う（draw ループが最新 threshold を読めるように）。
   useEffect(() => {
+    thresholdRef.current = thresholdDb;
     drawRef.current();
   }, [thresholdDb]);
 

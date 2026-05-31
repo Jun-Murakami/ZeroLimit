@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Jun Murakami
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Divider, FormControlLabel, Slider, Switch, Tooltip, Typography, Input, useMediaQuery } from '@mui/material';
 import { useJuceComboBoxIndex, useJuceSliderValue, useJuceToggleValue } from '../hooks/useJuceParam';
 import { useFineAdjustPointer } from '../hooks/useFineAdjustPointer';
@@ -74,9 +74,12 @@ export const ReleaseSection: React.FC = () => {
   const [inputText, setInputText] = useState<string>('');
   const [isDragging, setIsDragging] = useState(false);
 
-  // 最新値への参照（wheel native listener でのみ使う）
+  // 最新値への参照（wheel native listener でのみ使う）。
+  //  ref 書き込みは render 中ではなく effect で行う（concurrent 安全）。
   const releaseMsRef = useRef<number>(releaseMs);
-  releaseMsRef.current = releaseMs; // render で参照を同期（useEffect 不要）
+  useEffect(() => {
+    releaseMsRef.current = releaseMs;
+  }, [releaseMs]);
 
   // 書き込み: 正規化 0..1 を受けて JUCE に反映。
   //  ここで渡す t は「我々の log スケール上の 0..1」なので、frontend-mirror に
@@ -86,12 +89,17 @@ export const ReleaseSection: React.FC = () => {
   //  そこで一旦 ms に変換 → 線形 [0,1] に戻す → setNormalisedValue に渡す。
   //  こうすると frontend-mirror が線形で計算した scaled 値 = 我々の ms になり、
   //  C++ 側のパラメータ（log NormalisableRange）と同じ値で握手できる。
-  const applyNormalised = (t: number) => {
-    const clampedT = Math.max(0, Math.min(1, t));
-    const ms = normToMs(clampedT);
-    const linearT = (ms - MS_MIN) / (MS_MAX - MS_MIN);
-    setNormalised(Math.max(0, Math.min(1, linearT)));
-  };
+  // setNormalised は useJuceSliderValue 内で useCallback 済み（state ごとに安定）なので、
+  //  これを依存にした useCallback で applyNormalised も安定参照になる（effect の再購読を防ぐ）。
+  const applyNormalised = useCallback(
+    (t: number) => {
+      const clampedT = Math.max(0, Math.min(1, t));
+      const ms = normToMs(clampedT);
+      const linearT = (ms - MS_MIN) / (MS_MAX - MS_MIN);
+      setNormalised(Math.max(0, Math.min(1, linearT)));
+    },
+    [setNormalised],
+  );
 
   const handleSliderChange = (_: Event, value: number | number[]) => {
     applyNormalised(value as number);
@@ -144,7 +152,7 @@ export const ReleaseSection: React.FC = () => {
     return () => {
       el.removeEventListener('wheel', onWheel as EventListener);
     };
-  }, [sliderState]);
+  }, [sliderState, applyNormalised]);
 
   // 数値入力欄（ms）のホイール / 縦ドラッグ
   const inputElRef = useRef<HTMLInputElement | null>(null);

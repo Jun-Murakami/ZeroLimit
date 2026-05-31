@@ -2,13 +2,13 @@
 // Copyright (C) 2026 Jun Murakami
 import React, { useLayoutEffect, useRef } from 'react';
 import { Box, Typography } from '@mui/material';
+import { MIN_DB, LOUDNESS_MIN_LKFS } from '../utils/format';
 
 // メーター描画定数
 //  レンジは Threshold/Output フェーダー・GR メーターと揃えて 0..-30 dB。
 //  中点(-15)に設定して VISUAL_EXPONENT=1 の線形マッピングになる（GR と視覚的に揃う）。
 const METER_HEIGHT = 160;
 const DEFAULT_BAR_WIDTH = 24;
-const MIN_DB = -30;
 const TARGET_DB_AT_MID = -15;
 const LINEAR_AT_TARGET = (TARGET_DB_AT_MID - MIN_DB) / (0 - MIN_DB);
 const VISUAL_EXPONENT = Math.log(0.5) / Math.log(Math.max(1e-6, LINEAR_AT_TARGET));
@@ -208,7 +208,7 @@ export const GainReductionMeterBar: React.FC<{ grDb: number; width?: number; hei
 // ラウドネス（Momentary LKFS）メーター
 // ============================
 //  単一バーで -60..0 LKFS を非線形スケール（dbToUnit と同じ視覚カーブ）
-const LOUDNESS_MIN_LKFS = -60;
+//  LOUDNESS_MIN_LKFS は utils/format からインポート（formatLkfs と共有）。
 
 const lkfsToUnit = (lkfs: number): number => {
   const clamped = Math.max(LOUDNESS_MIN_LKFS, Math.min(0, lkfs));
@@ -279,11 +279,4 @@ export const LoudnessMeterBar: React.FC<{ lkfs: number; width?: number; height?:
   );
 };
 
-// ============================
-// ラベル付き dB 表示
-// ============================
-export const formatDb = (db: number): string => (db <= MIN_DB ? '-∞' : Math.max(MIN_DB, Math.min(0, db)).toFixed(1));
-
-// Momentary LKFS 値用の数値表示（-∞ から 0 LKFS）
-export const formatLkfs = (lkfs: number): string =>
-  lkfs <= LOUDNESS_MIN_LKFS ? '-∞' : Math.max(LOUDNESS_MIN_LKFS, Math.min(0, lkfs)).toFixed(1);
+// dB / LKFS 表示フォーマットは utils/format.ts に分離（react-refresh 対応）。

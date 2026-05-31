@@ -31,8 +31,12 @@ export function useNumberInputAdjust(
   inputRef: React.RefObject<HTMLElement | null>,
   options: NumberInputAdjustOptions,
 ) {
+  // 最新 options をハンドラから参照する Latest Ref。
+  //  ref 書き込みは render 中ではなく effect で行う（concurrent 安全）。
   const optsRef = useRef<NumberInputAdjustOptions>(options);
-  optsRef.current = options;
+  useEffect(() => {
+    optsRef.current = options;
+  });
 
   useEffect(() => {
     const el = inputRef.current;

@@ -150,9 +150,12 @@ export const ParameterFader: React.FC<ParameterFaderProps> = ({
   const [inputText, setInputText] = useState<string>('');
   const [isDragging, setIsDragging] = useState(false);
 
-  // wheel ハンドラから最新値を参照するための Latest Ref Pattern
+  // wheel ハンドラから最新値を参照するための Latest Ref Pattern。
+  //  ref 書き込みは render 中ではなく effect で行う（concurrent 安全）。
   const valueRef = useRef<number>(value);
-  valueRef.current = value;
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
 
   const applyValue = (v: number) => {
     setScaled(v, min, max);

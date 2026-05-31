@@ -6,6 +6,11 @@
 #include <juce_dsp/juce_dsp.h>
 #include <array>
 
+// -Wsign-conversion を局所抑制：std::array を int の ch/band/stage インデックスで添字する DSP ループが
+//  多く、JUCE の int API（getWritePointer 等）と std::array(size_t) の境界で int↔size_t が必然的に
+//  混在する。個別キャストは別の変換警告を連鎖させるため JUCE 本体同様ファイル単位で抑制（常に正値で安全）。
+JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wsign-conversion")
+
 namespace zl::dsp {
 
 // 可変バンド数 Linkwitz-Riley 4th-order IIR crossover（ゼロレイテンシー、3 / 4 / 5 バンド）
@@ -141,3 +146,5 @@ private:
 };
 
 } // namespace zl::dsp
+
+JUCE_END_IGNORE_WARNINGS_GCC_LIKE

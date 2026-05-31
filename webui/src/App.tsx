@@ -11,9 +11,8 @@ import {
   GainReductionMeterBar,
   LevelMeterBar,
   LoudnessMeterBar,
-  formatDb,
-  formatLkfs,
 } from './components/VUMeter';
+import { formatDb, formatLkfs } from './utils/format';
 import { ReleaseSection } from './components/ReleaseSection';
 import { useHostShortcutForwarding } from './hooks/useHostShortcutForwarding';
 import { useGlobalZoomGuard } from './hooks/useGlobalZoomGuard';
@@ -30,6 +29,13 @@ import './App.css';
 // フェーダー/メーターの下限に合わせる（VUMeter.tsx 側と揃える）
 const MIN_DB = -30;
 const MIN_LKFS = -60;
+
+// APVTS のレンジは THRESHOLD / OUTPUT_GAIN 共に -30..0 dB。
+//  純粋関数なのでモジュールスコープに置き、effect 依存配列を安定させる。
+const PARAM_MIN_DB = -30;
+const PARAM_MAX_DB = 0;
+const clampParamDb = (db: number): number => Math.max(PARAM_MIN_DB, Math.min(PARAM_MAX_DB, db));
+const dbToNorm = (db: number): number => (clampParamDb(db) - PARAM_MIN_DB) / (PARAM_MAX_DB - PARAM_MIN_DB);
 
 type MeterMode = 'peak' | 'rms' | 'momentary';
 const MODES: MeterMode[] = ['peak', 'rms', 'momentary'];
@@ -133,20 +139,25 @@ function App() {
   const outputGainSlider = useJuceSliderState('OUTPUT_GAIN');
   const { value: linkActive, setValue: setLinkJuce } = useJuceToggleValue('LINK');
 
-  // Link state を listener クロージャから参照するための ref（Latest Ref Pattern）。
-  //  useEffect で反映させると commit 後に更新されるため、commit より前に走る listener が
-  //  1 フレーム古い値を見る timing bug がありうる。render 中代入で常に同期を保証する。
+  // Link state を listener クロージャから参照するための Latest Ref。
+  //  ref 書き込みは render 中ではなく effect で行う（render 中の書き込みは concurrent mode で
+  //  破棄されうるため）。listener が走るのはスライダー drag 中であり、LINK トグル直後の
+  //  1 フレームではないため effect 反映で十分（タイミング上の取りこぼしは起きない）。
   const linkActiveRef = useRef<boolean>(linkActive);
-  linkActiveRef.current = linkActive;
+  useEffect(() => {
+    linkActiveRef.current = linkActive;
+  }, [linkActive]);
 
-  // Link ON 時点の (Output - Threshold) オフセット
+  // Link ON 時点（特に OFF→ON 遷移時）の (Output - Threshold) オフセットを確定する。
+  //  ユーザー操作は toggleLink() 側でも設定するが、DAW オートメーション経由の linkActive 変化も
+  //  この effect がカバーする（linkActive が true になった時のみ再計算）。
   const deltaRef = useRef<number>(0);
-
-  // APVTS のレンジは THRESHOLD / OUTPUT_GAIN 共に -30..0 dB
-  const PARAM_MIN_DB = -30;
-  const PARAM_MAX_DB = 0;
-  const clampParamDb = (db: number): number => Math.max(PARAM_MIN_DB, Math.min(PARAM_MAX_DB, db));
-  const dbToNorm = (db: number): number => (clampParamDb(db) - PARAM_MIN_DB) / (PARAM_MAX_DB - PARAM_MIN_DB);
+  useEffect(() => {
+    if (!linkActive) return;
+    const tNow = thresholdSlider ? thresholdSlider.getScaledValue() : 0;
+    const oNow = outputGainSlider ? outputGainSlider.getScaledValue() : 0;
+    deltaRef.current = oNow - tNow;
+  }, [linkActive, thresholdSlider, outputGainSlider]);
 
   // ループ止めの 2 軸:
   //   (1) idempotent: 書こうとしている値と相手の現在値が既に一致していればスキップ
@@ -158,19 +169,6 @@ function App() {
   const SUPPRESS_WINDOW_MS = 80;
   const suppressThresholdUntilRef = useRef<number>(0);
   const suppressOutputUntilRef    = useRef<number>(0);
-
-  // LINK が OFF→ON に変わる瞬間を検出して delta を更新する（DAW オートメーション対応）。
-  //  render 中に rising edge 検出 + ref 更新を行う。ユーザー操作は toggleLink() 側でも同じ
-  //  delta を計算しているが（そちらは setState 前に ref を確定させる）、DAW オートメーション経由で
-  //  外部から linkActive が変わるケースをここでカバーする。
-  //  StrictMode で render が 2 回走っても、2 回目は prevRef=cur となり rising edge 検出は自然に無効化される。
-  const prevLinkActiveRef = useRef<boolean>(linkActive);
-  if (linkActive && ! prevLinkActiveRef.current) {
-    const tNow = thresholdSlider ? thresholdSlider.getScaledValue() : 0;
-    const oNow = outputGainSlider ? outputGainSlider.getScaledValue() : 0;
-    deltaRef.current = oNow - tNow;
-  }
-  prevLinkActiveRef.current = linkActive;
 
   // Threshold 変化 → Output をミラー（必要な時のみ）
   useEffect(() => {
@@ -275,6 +273,10 @@ function App() {
   useEffect(() => {
     juceBridge.whenReady(() => {
       juceBridge.callNative('system_action', 'ready');
+      // 初期サイズを「設計 CSS px × ratio」に確定（MixCompare 方式）。レイアウト確定後の値を使うため次フレームで送る。
+      requestAnimationFrame(() => {
+        juceBridge.callNative('window_action', 'apply_layout', window.innerWidth, window.innerHeight);
+      });
     });
   }, []);
 
@@ -359,6 +361,8 @@ function App() {
   const pendingResize  = useRef<{ w: number; h: number } | null>(null);
   const lastSentSize   = useRef<{ w: number; h: number } | null>(null);
   const resizeInFlight = useRef(false);
+  // resizeBegin（CSS→論理 px 比率確定）の完了 Promise。最初の resizeTo はこれの解決を待つ（MixCompare 方式）。
+  const beginReady = useRef<Promise<unknown> | null>(null);
 
   const pumpResize = () => {
     if (resizeInFlight.current) return;
@@ -377,24 +381,33 @@ function App() {
       pumpResize();
     };
     const safety = window.setTimeout(done, 200); // 完了応答が来なくてもフリーズしない安全策
-    void juceBridge.callNative('window_action', 'resizeTo', s.w, s.h).then(() => {
-      window.clearTimeout(safety);
-      done();
-    });
+    // resizeBegin（比率確定）の完了を待ってから resizeTo を送る（比率確定前のジャンプ競合を防ぐ）。
+    const begin = beginReady.current ?? Promise.resolve();
+    void begin
+      .then(() => juceBridge.callNative('window_action', 'resizeTo', s.w, s.h))
+      .then(() => {
+        window.clearTimeout(safety);
+        done();
+      });
   };
 
   const onDragStart: React.PointerEventHandler<HTMLDivElement> = (e) => {
     dragState.current = { startX: e.clientX, startY: e.clientY, startW: window.innerWidth, startH: window.innerHeight };
     lastSentSize.current = { w: window.innerWidth, h: window.innerHeight };
+    // ドラッグ開始時に CSS px → 論理 px の換算比率を native へ確定させる（順序保証のため完了 Promise を保持）。
+    beginReady.current = juceBridge.callNative('window_action', 'resizeBegin', window.innerWidth, window.innerHeight);
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onDrag: React.PointerEventHandler<HTMLDivElement> = (e) => {
     if (!dragState.current) return;
-    const dx = e.clientX - dragState.current.startX;
-    const dy = e.clientY - dragState.current.startY;
+    // ハンドル右下角をカーソル位置(ビューポート座標=CSS px)へ直接アンカーする。
+    //  startW+dx 方式だと掴んだ位置のズレ(grab gap)を恒久的に引きずる（カーソルとハンドルが
+    //  ズレたまま伸縮する）ため、カーソル直アンカーにして角がカーソルへ追従するようにする。
+    //  ハンドルは right:0/bottom:0 でビューポート右下に固定、左上端は (0,0) なので
+    //  clientX/clientY がそのまま左/上端からの目標サイズ(CSS px)になる。
     // C++ 側 PluginEditor の kMinWidth / kMinHeight と合わせる
-    const w = Math.round(Math.max(340, dragState.current.startW + dx));
-    const h = Math.round(Math.max(400, dragState.current.startH + dy));
+    const w = Math.round(Math.max(340, e.clientX));
+    const h = Math.round(Math.max(400, e.clientY));
     pendingResize.current = { w, h };
     pumpResize();
   };

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Jun Murakami
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Box, Slider, Input, Typography } from '@mui/material';
 import { styled, lighten, darken } from '@mui/material/styles';
 import { getSliderState } from 'juce-framework-frontend-mirror';
@@ -143,15 +143,17 @@ export const GainFader: React.FC<GainFaderProps> = ({
   // フェーダー全体の縦サイズ（px）。全体をコンパクトにするため約2/3へ縮小。
   // メーターの高さ(≈140px)と揃える。
   const SLIDER_HEIGHT = 140;
-  // JUCE パラメータ（存在しないIDの場合は null）
-  const sliderStateRef = useRef<ReturnType<typeof getSliderState> | null>(null);
-  if (parameterId && sliderStateRef.current === null) {
-    sliderStateRef.current = getSliderState(parameterId) || null;
-  }
+  // JUCE パラメータ（存在しないIDの場合は null）。
+  //  getSliderState は同一 ID で同一インスタンスを返すため useMemo で安定参照を得る
+  //  （render 中の ref 書き込みを避ける）。
+  const sliderState = useMemo(
+    () => (parameterId ? getSliderState(parameterId) ?? null : null),
+    [parameterId],
+  );
 
   // ローカル dB 値（-120..0）
   const [localValue, setLocalValue] = useState<number>(() => {
-    const st = sliderStateRef.current;
+    const st = sliderState;
     if (st) {
       const n = st.getNormalisedValue();
       return n <= 0 ? -120 : n * 120 - 120;
@@ -172,7 +174,7 @@ export const GainFader: React.FC<GainFaderProps> = ({
   // 外部からの値の更新を反映（ドラッグ中は無視）
   useEffect(() => {
     // JUCE 直接バインド時: 値変更イベントを購読してローカル値を同期
-    const st = sliderStateRef.current;
+    const st = sliderState;
     if (!st) return;
     const listenerId = st.valueChangedEvent.addListener(() => {
       if (isDragging) return; // ドラッグ中はエコーを無視
@@ -184,7 +186,7 @@ export const GainFader: React.FC<GainFaderProps> = ({
     return () => {
       st.valueChangedEvent.removeListener(listenerId);
     };
-  }, [parameterId, isDragging]);
+  }, [sliderState, isDragging]);
 
   // フェーダーの対数カーブ設定
   // Cubaseに近い挙動を目指し、振幅aを指数でマッピングし
@@ -238,7 +240,7 @@ export const GainFader: React.FC<GainFaderProps> = ({
     setInputValue(db <= -120 ? '-∞' : db.toFixed(1));
     // dB → 正規化 0..1 へ変換し、JUCE へ反映
     const n = db <= -120 ? 0 : (db + 120) / 120;
-    sliderStateRef.current?.setNormalisedValue(n);
+    sliderState?.setNormalisedValue(n);
   };
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -258,7 +260,7 @@ export const GainFader: React.FC<GainFaderProps> = ({
     setLocalValue(db);
     setInputValue(db <= -120 ? '-∞' : db.toFixed(1));
     const n = db <= -120 ? 0 : (db + 120) / 120;
-    sliderStateRef.current?.setNormalisedValue(n);
+    sliderState?.setNormalisedValue(n);
   };
 
   const handleInputKeyDown = (event: React.KeyboardEvent) => {
@@ -270,7 +272,7 @@ export const GainFader: React.FC<GainFaderProps> = ({
   const handleDragStart = () => {
     setIsDragging(true);
     // JUCE へドラッグ開始を通知
-    sliderStateRef.current?.sliderDragStarted();
+    sliderState?.sliderDragStarted();
     onDragStart?.();
   };
 
@@ -279,7 +281,7 @@ export const GainFader: React.FC<GainFaderProps> = ({
     if (isDragging) {
       setIsDragging(false);
       // JUCE へドラッグ終了を通知
-      sliderStateRef.current?.sliderDragEnded();
+      sliderState?.sliderDragEnded();
     }
     onDragEnd?.();
   };
@@ -292,7 +294,7 @@ export const GainFader: React.FC<GainFaderProps> = ({
       setLocalValue(defaultValue);
       setInputValue(defaultValue <= -120 ? '-∞' : defaultValue.toFixed(1));
       const n = defaultValue <= -120 ? 0 : (defaultValue + 120) / 120;
-      sliderStateRef.current?.setNormalisedValue(n);
+      sliderState?.setNormalisedValue(n);
     }
   };
 
@@ -324,13 +326,13 @@ export const GainFader: React.FC<GainFaderProps> = ({
       setLocalValue(newValue);
       setInputValue(newValue <= -120 ? '-∞' : newValue.toFixed(1));
       const n = newValue <= -120 ? 0 : (newValue + 120) / 120;
-      sliderStateRef.current?.setNormalisedValue(n);
+      sliderState?.setNormalisedValue(n);
     };
     el.addEventListener('wheel', handleWheelNative, { passive: false });
     return () => {
       el.removeEventListener('wheel', handleWheelNative as EventListener);
     };
-  }, [parameterId]);
+  }, [sliderState]);
 
   // 目盛りの値と位置（下から上へのdB値）
   const scaleMarks = [

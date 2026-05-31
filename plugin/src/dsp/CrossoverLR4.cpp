@@ -3,6 +3,9 @@
 #include "CrossoverLR4.h"
 #include <algorithm>
 
+// -Wsign-conversion を局所抑制（理由は CrossoverLR4.h と同じ：std::array×int インデックスと JUCE int API の混在）。
+JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wsign-conversion")
+
 namespace zl::dsp {
 
 void CrossoverLR4::prepare(double sr, int channelsIn, int maximumBlockSize)
@@ -204,3 +207,5 @@ void CrossoverLR4::processBlock(const juce::AudioBuffer<float>& input,
 }
 
 } // namespace zl::dsp
+
+JUCE_END_IGNORE_WARNINGS_GCC_LIKE

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Jun Murakami
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 
 export interface FineAdjustPointerOptions {
   /** Ctrl/Cmd + クリック（移動なし）でリセット。Shift のみのクリックでは呼ばれない */
@@ -32,8 +32,13 @@ export interface FineAdjustPointerOptions {
 //  - 累積 px は caller 側で wheelStepFine 相当の係数を掛けて値空間へ変換する。
 //
 export function useFineAdjustPointer(options: FineAdjustPointerOptions) {
+  // 最新 options を pointer ハンドラから参照する Latest Ref。
+  //  ref 書き込みは render 中ではなく effect で行う（concurrent 安全）。
+  //  ハンドラが走るのはユーザー操作時で render 直後ではないため effect 反映で十分。
   const optsRef = useRef<FineAdjustPointerOptions>(options);
-  optsRef.current = options;
+  useEffect(() => {
+    optsRef.current = options;
+  });
 
   return useCallback((e: React.PointerEvent) => {
     const ctrl = e.ctrlKey || e.metaKey;

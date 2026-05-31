@@ -19,17 +19,15 @@ type SliderProps = {
 export const JuceBoundSlider: React.FC<SliderProps> = ({ identifier, label, orientation, sx, valueLabelDisplay }) => {
   const sliderState = getSliderState(identifier);
   // Hooks は無条件に宣言する必要がある（早期 return の前に置く）。
-  // sliderState が未解決の初期レンダーでも安全な初期値を使い、実体が来たら useEffect で同期する。
-  const [value, setValue] = useState<number>(0);
+  //  初期値は lazy init で実体から直接読む（effect 内での同期 setState を避ける）。
+  //  実体が無い初期レンダーでも安全な既定値を返す。
+  const [value, setValue] = useState<number>(() => sliderState?.getNormalisedValue() ?? 0);
   const [properties, setProperties] = useState(sliderState?.properties);
 
   useEffect(() => {
     // sliderState がまだ無い場合は何もしない（Hooks 自体は無条件に呼ばれている）
     if (!sliderState) return;
-    // 初回同期（実体が得られたら最新値/プロパティを反映）
-    setValue(sliderState.getNormalisedValue());
-    setProperties(sliderState.properties);
-    // 変更リスナーを登録して UI を更新
+    // 変更リスナーを登録して UI を更新（初回同期は lazy init 済み）
     const vId = sliderState.valueChangedEvent.addListener(() => setValue(sliderState.getNormalisedValue()));
     const pId = sliderState.propertiesChangedEvent.addListener(() => setProperties(sliderState.properties));
     return () => {
@@ -86,16 +84,13 @@ type ToggleProps = {
 
 export const JuceBoundToggle: React.FC<ToggleProps> = ({ identifier, label }) => {
   const toggleState = getToggleState(identifier);
-  // Hooks は早期 return より前に無条件で呼び出す
-  const [checked, setChecked] = useState<boolean>(false);
+  // Hooks は早期 return より前に無条件で呼び出す。初期値は lazy init で実体から読む。
+  const [checked, setChecked] = useState<boolean>(() => toggleState?.getValue() ?? false);
   const [properties, setProperties] = useState(toggleState?.properties);
 
   useEffect(() => {
     if (!toggleState) return;
-    // 初回同期
-    setChecked(toggleState.getValue());
-    setProperties(toggleState.properties);
-    // 変更監視
+    // 変更監視（初回同期は lazy init 済み）
     const vId = toggleState.valueChangedEvent.addListener(() => setChecked(toggleState.getValue()));
     const pId = toggleState.propertiesChangedEvent.addListener(() => setProperties(toggleState.properties));
     return () => {
@@ -126,16 +121,13 @@ type ComboProps = {
 
 export const JuceBoundCombo: React.FC<ComboProps> = ({ identifier, label }) => {
   const comboState = getComboBoxState(identifier);
-  // Hooks は早期 return より前に無条件で呼び出す
-  const [index, setIndex] = useState<number>(0);
+  // Hooks は早期 return より前に無条件で呼び出す。初期値は lazy init で実体から読む。
+  const [index, setIndex] = useState<number>(() => comboState?.getChoiceIndex() ?? 0);
   const [properties, setProperties] = useState(comboState?.properties);
 
   useEffect(() => {
     if (!comboState) return;
-    // 初回同期
-    setIndex(comboState.getChoiceIndex());
-    setProperties(comboState.properties);
-    // 変更監視
+    // 変更監視（初回同期は lazy init 済み）
     const vId = comboState.valueChangedEvent.addListener(() => setIndex(comboState.getChoiceIndex()));
     const pId = comboState.propertiesChangedEvent.addListener(() => setProperties(comboState.properties));
     return () => {
