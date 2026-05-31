@@ -100,6 +100,9 @@ private:
     double webResizeRatioW { 1.0 };
     double webResizeRatioH { 1.0 };
     bool   initialLayoutApplied { false };
+    // APVTS state の保存サイズ（editorWidth/editorHeight）から復元したか。
+    //  復元した場合、apply_layout の初回 ×ratio リサイズで保存値（論理px）を上書きしない（二重適用防止）。
+    bool   restoredFromSavedSize { false };
     int    designTargetW { 453 };
     int    designTargetH { 470 };
 

@@ -266,8 +266,10 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
                               if (!initialLayoutApplied)
                               {
                                   initialLayoutApplied = true;
-                                  setSize(juce::roundToInt(designTargetW * webResizeRatioW),
-                                          juce::roundToInt(designTargetH * webResizeRatioH));
+                                  // 保存サイズから復元した場合は論理 px で既に正しいので上書きしない（二重 ratio 防止）。
+                                  if (!restoredFromSavedSize)
+                                      setSize(juce::roundToInt(designTargetW * webResizeRatioW),
+                                              juce::roundToInt(designTargetH * webResizeRatioH));
                               }
                             #endif
                               completion(juce::var{ true });
@@ -317,11 +319,21 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
 
     addAndMakeVisible(webView);
 
-    // 初期サイズ（最小幅 kMinWidth=447 に合わせて 453×470）
-    setSize(453, 470);
-    // 設計サイズ（CSS px 相当）を控える。apply_layout 初回に × ratio して論理 px へ直す。
-    designTargetW = getWidth();
-    designTargetH = getHeight();
+    // 編集サイズの永続化。ホストのウィンドウサイズ記憶はフォーマット/ホスト依存で不安定
+    //  （VST3 on Bitwig、Cubase Mac、Pro Tools、Logic、Linux 等で復元されない/丸められる）。
+    //  そこで TinyVU と同様に APVTS state へ editorWidth/editorHeight を自前保存し、
+    //  ここで強制復元してホスト・フォーマット非依存にする。保存値は論理 px。
+    const auto apvtsState = audioProcessor.getState().state;
+    restoredFromSavedSize = apvtsState.hasProperty("editorWidth") && apvtsState.hasProperty("editorHeight");
+    const int savedW = static_cast<int>(apvtsState.getProperty("editorWidth",  453));
+    const int savedH = static_cast<int>(apvtsState.getProperty("editorHeight", 470));
+    const int restoreW = juce::jlimit(kMinWidth,  kMaxWidth,  savedW);
+    const int restoreH = juce::jlimit(kMinHeight, kMaxHeight, savedH);
+
+    // 設計サイズ（CSS px 相当）。apply_layout 初回に × ratio して論理 px へ直す（保存復元時は上書きしない）。
+    designTargetW = 453;
+    designTargetH = 470;
+    setSize(restoreW, restoreH);
 
     // リサイズ可能に（プラグイン/スタンドアロン共通）
     //  - OS ウィンドウ四辺 / ResizableCornerComponent / WebUI オーバーレイ
@@ -353,6 +365,16 @@ ZeroLimitAudioProcessorEditor::ZeroLimitAudioProcessorEditor(ZeroLimitAudioProce
         webView.goToURL(LOCAL_DEV_SERVER_ADDRESS);
     else
         webView.goToURL(juce::WebBrowserComponent::getResourceProviderRoot());
+
+    // 一部ホスト（Pro Tools AAX, Cubase など）はコンストラクタ中の setSize を無視したり、
+    //  独自保存サイズで最初の resized() を呼ぶため、次のメッセージループで復元サイズへ強制復帰させる。
+    juce::Component::SafePointer<ZeroLimitAudioProcessorEditor> safeSelf { this };
+    juce::MessageManager::callAsync([safeSelf, restoreW, restoreH]()
+    {
+        if (safeSelf == nullptr) return;
+        if (safeSelf->getWidth() != restoreW || safeSelf->getHeight() != restoreH)
+            safeSelf->setSize(restoreW, restoreH);
+    });
 
     // 60Hz。メーター / 波形 / DPI ポーリングの駆動源。
     //  ディスプレイ vsync と合い、波形ラン描画が 30Hz より滑らかに見える。
@@ -396,6 +418,12 @@ void ZeroLimitAudioProcessorEditor::resized()
         resizer->setBounds(getWidth() - gripperSize, getHeight() - gripperSize, gripperSize, gripperSize);
         resizer->toFront(true);
     }
+
+    // 編集サイズを APVTS state に保存し、次回オープン時にホスト保存値ではなくこの値で復元する。
+    //  property 名は parameter ID と衝突しないため APVTS listener には影響しない。論理 px で保存。
+    auto state = audioProcessor.getState().state;
+    state.setProperty("editorWidth",  getWidth(),  nullptr);
+    state.setProperty("editorHeight", getHeight(), nullptr);
 
 #if JUCE_LINUX || JUCE_BSD
     // ホスト主導の resized()（= guiSetSize/onSize の echo）が着地したら保留 resizeTo を確定。
