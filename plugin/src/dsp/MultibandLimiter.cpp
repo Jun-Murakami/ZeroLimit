@@ -3,6 +3,9 @@
 #include "MultibandLimiter.h"
 #include <algorithm>
 
+// -Wsign-conversion を局所抑制（理由は CrossoverLR4 と同じ：std::array×int インデックスと JUCE int API の混在）。
+JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wsign-conversion")
+
 namespace zl::dsp {
 
 namespace {
@@ -190,3 +193,5 @@ float MultibandLimiter::processBlock(juce::AudioBuffer<float>& buffer, float* ga
 }
 
 } // namespace zl::dsp
+
+JUCE_END_IGNORE_WARNINGS_GCC_LIKE

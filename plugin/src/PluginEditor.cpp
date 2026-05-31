@@ -23,7 +23,7 @@
 
 namespace {
 
-std::vector<std::byte> streamToVector(juce::InputStream& stream)
+[[maybe_unused]] std::vector<std::byte> streamToVector(juce::InputStream& stream)
 {
     const auto sizeInBytes = static_cast<size_t>(stream.getTotalLength());
     std::vector<std::byte> result(sizeInBytes);
