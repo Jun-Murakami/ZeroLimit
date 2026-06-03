@@ -6,6 +6,12 @@
 #include "KeyEventForwarder.h"
 #include "Version.h"
 
+// CMake 未構成時（IntelliSense/分岐切替直後など、生成済み Version.h が include パスに無い状態）でも
+//  コンパイル・解析が通るようフォールバックを定義する。実ビルドでは Version.h の値が優先される。
+#ifndef ZEROLIMIT_VERSION_STRING
+ #define ZEROLIMIT_VERSION_STRING "0.0.0-dev"
+#endif
+
 #include <unordered_map>
 #include <cmath>
 
@@ -432,6 +438,11 @@ void ZeroLimitAudioProcessorEditor::resolveResizeAck()
 
 void ZeroLimitAudioProcessorEditor::applyDisplayScale()
 {
+#if JUCE_LINUX || JUCE_BSD
+    // ※ この transform 補正は Linux 専用。macOS(WKWebView)/Windows(WebView2) は Retina・高DPI を native に
+    //   処理するため transform 不要。macOS では getPlatformScaleFactor() が Retina でも 1.0 を返す一方
+    //   devicePixelRatio は 2.0 のため、無条件適用すると s=2.0 で窓が倍に膨らむ。Windows は両者一致で偶然
+    //   s=1.0 に収束するだけ。将来の DPI 不一致事故も含め Linux/BSD 以外では一切走らせない。
     // Linux ウィンドウ物理サイズ補正。ホストの宣言スケール(Bitwig は 150%を200%と誤判定)に依存せず、
     //  WebView が OS から拾う真のディスプレイ倍率 webViewDpr を基準にする。Standalone は OS が拡大するので
     //  対象外（掛けると二重で巨大化）。補正は埋め込みのみ（KDE では Standalone/埋込とも peerScale=1.0 で区別
@@ -452,7 +463,6 @@ void ZeroLimitAudioProcessorEditor::applyDisplayScale()
     const float s = (lastWebViewDpr > 0.0) ? (float) (lastWebViewDpr / peerScale) : 1.0f;
     setTransform(juce::AffineTransform::scale(s));
 
-#if JUCE_LINUX || JUCE_BSD
     settleReconcileDone = false;
     lastResizeActivityMs = juce::Time::getMillisecondCounter();
 #endif
