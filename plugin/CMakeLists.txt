@@ -47,7 +47,7 @@ juce_add_plugin(ZeroLimit
     PLUGIN_MANUFACTURER_CODE Jmbc
     PLUGIN_CODE ZrLm
     FORMATS ${ZEROLIMIT_FORMATS}
-    LV2URI "https://junmurakami.com/plugins/zerolimit"
+    LV2URI "https://junmurakami.com/apps/zerolimit"
     PLUGIN_AU_MAIN_TYPE "aufx"
     VST3_CATEGORIES "Fx" "Dynamics"
     AAX_CATEGORY "AAX_ePlugInCategory_Dynamics"
