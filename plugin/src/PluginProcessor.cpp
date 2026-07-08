@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Jun Murakami
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Version.h"
+#include "util/DiagnosticLog.h"
 
 #include <cmath>
 #include <algorithm>
@@ -50,6 +52,8 @@ ZeroLimitAudioProcessor::ZeroLimitAudioProcessor()
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       parameters(*this, nullptr, juce::Identifier("ZeroLimit"), createParameterLayout())
 {
+    // WebView 起動診断ログ + Linux 描画/起動緩和策（エディタ生成より前に実行）
+    wvdiag::DiagnosticLog::install(ZEROLIMIT_PRODUCT_NAME, ZEROLIMIT_VERSION_STRING);
 }
 
 ZeroLimitAudioProcessor::~ZeroLimitAudioProcessor() = default;
